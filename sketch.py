@@ -18,6 +18,9 @@ if sys.gettrace() is not None:
     theano.config.exception_verbosity='high'
     theano.config.compute_test_value = 'warn'
 
+import theano.tensor as T
+import numpy as np
+
 import fuel
 
 from argparse import ArgumentParser
@@ -25,24 +28,24 @@ from argparse import ArgumentParser
 from fuel.streams import DataStream
 from fuel.schemes import SequentialScheme, ShuffledScheme
 
-from blocks.algorithms import GradientDescent, CompositeRule, StepClipping, Adam, AdaGrad, RMSProp, StepRule
+from blocks.algorithms import GradientDescent, CompositeRule, StepClipping, Adam
 from blocks.initialization import Orthogonal, Constant, Xavier
 
 from blocks.graph import ComputationGraph
 from blocks.extensions import FinishAfter, Timing, Printing, ProgressBar
 from blocks.extensions.saveload import SimpleExtension
 from blocks.extensions.saveload import Dump, LoadFromDump
-
+from blocks.bricks import Random, Initializable
+from blocks.bricks.base import application
 from blocks.extensions.monitoring import DataStreamMonitoring, TrainingDataMonitoring
 from blocks.main_loop import MainLoop
 from blocks.model import Model
 from blocks.bricks.recurrent import LSTM, GatedRecurrent
-from blocks.bricks.sequence_generators import (
-    SequenceGenerator, Readout, TrivialFeedback)
+from blocks.bricks.sequence_generators import SequenceGenerator, Readout
 from fuel.datasets import H5PYDataset
 from blocks.filter import VariableFilter
 
-from sketch import *
+floatX = theano.config.floatX
 fuel.config.floatX = floatX
 from fuel.transformers import Mapping
 from blocks.utils import named_copy, dict_union
@@ -113,7 +116,8 @@ class Sample(SimpleExtension):
         batch_size = self.N * self.N
 
         self.sample = ComputationGraph(generator.generate(
-            n_steps=steps, batch_size=batch_size, iterate=True)).get_theano_function()
+            n_steps=steps, batch_size=batch_size, iterate=True)
+        ).get_theano_function()
 
     def do(self, callback_name, *args):
         batch_size = self.N * self.N
