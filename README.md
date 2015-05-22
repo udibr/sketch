@@ -27,4 +27,3 @@ was raised is shown in `samples-pen.png`
 Notes
 -----
  * This is a work in progress
- * dropout does not work for now
