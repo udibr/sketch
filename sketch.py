@@ -350,11 +350,9 @@ def main(name, epochs, batch_size, learning_rate,
     cg = ComputationGraph(cost)
     if dropout:
         from blocks.roles import INPUT
-        dropout_target = VariableFilter(roles=[INPUT])(cg.variables)
-        logger.info("Performing dropout on %d weights:"%len(dropout_target))
-        for key, value in params.items():
-            if value in dropout_target:
-                logger.info("%s"%key)
+        dropout_target = VariableFilter(roles=[INPUT],
+                                        bricks=[readout],
+                                        name_regex='states')(cg.variables)
         cg = apply_dropout(cg, dropout_target, 0.5)
         target_cost = cg.outputs[0]
     else:

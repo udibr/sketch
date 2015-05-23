@@ -14,7 +14,7 @@ Dependencies
   my fork or copy paste the changes:
   * [Xavier weight initialization](https://github.com/udibr/blocks/blob/master/blocks/initialization.py#L228)
   * [Add bias to Fork class](https://github.com/udibr/blocks/blob/master/blocks/bricks/parallel.py#L101)
-* Download data set using [this notebook](./handwriting-to-hdf5.ipynb)
+* Download handwritting dataset using [this notebook](./handwriting-to-hdf5.ipynb)
  
 Running code
 ------------
