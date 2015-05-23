@@ -31,7 +31,7 @@ from fuel.schemes import SequentialScheme, ShuffledScheme
 from blocks.algorithms import GradientDescent, CompositeRule, StepClipping, Adam
 from blocks.initialization import Orthogonal, Constant, Xavier
 
-from blocks.graph import ComputationGraph
+from blocks.graph import ComputationGraph, apply_dropout
 from blocks.extensions import FinishAfter, Timing, Printing, ProgressBar
 from blocks.extensions.saveload import SimpleExtension
 from blocks.extensions.saveload import Dump, LoadFromDump
@@ -44,6 +44,7 @@ from blocks.bricks.recurrent import LSTM, GatedRecurrent
 from blocks.bricks.sequence_generators import SequenceGenerator, Readout
 from fuel.datasets import H5PYDataset
 from blocks.filter import VariableFilter
+from blocks.bricks.parallel import Fork
 
 floatX = theano.config.floatX
 fuel.config.floatX = floatX
@@ -269,7 +270,7 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
 
 #----------------------------------------------------------------------------
 def main(name, epochs, batch_size, learning_rate,
-         dim, mix_dim, old_model_name, max_length, bokeh, GRU):
+         dim, mix_dim, old_model_name, max_length, bokeh, GRU, dropout):
 
     #----------------------------------------------------------------------
     datasource = name
@@ -287,6 +288,8 @@ def main(name, epochs, batch_size, learning_rate,
 
     if GRU:
         jobname += 'g'
+    if dropout:
+        jobname += 'D'
 
     print("\nRunning experiment %s" % jobname)
     print("         learning rate: %5.3f" % learning_rate) 
@@ -308,7 +311,11 @@ def main(name, epochs, batch_size, learning_rate,
         source_names=['states'],
         emitter=emitter,
         name="readout")
-    generator = SequenceGenerator(readout=readout, transition=transition)
+    normal_inputs = [name for name in transition.apply.sequences
+                     if 'mask' not in name]
+    fork = Fork(normal_inputs, use_bias=True)
+    generator = SequenceGenerator(readout=readout, transition=transition,
+                                  fork=fork)
 
     # Initialization settings
     generator.weights_init = Orthogonal()
@@ -316,7 +323,7 @@ def main(name, epochs, batch_size, learning_rate,
 
     # for LSTM you can not use Orthogonal because it has 1D weights connecting
     # the cells to in/out/forget gates (but you can on GatedRecurrent)
-    if isinstance(transition,LSTM):
+    if not GRU:
         generator.push_initialization_config()
         transition.weights_init = Xavier()
 
@@ -341,8 +348,20 @@ def main(name, epochs, batch_size, learning_rate,
 
     # Define the training algorithm.
     cg = ComputationGraph(cost)
+    if dropout:
+        from blocks.roles import INPUT
+        dropout_target = VariableFilter(roles=[INPUT])(cg.variables)
+        logger.info("Performing dropout on %d weights:"%len(dropout_target))
+        for key, value in params.items():
+            if value in dropout_target:
+                logger.info("%s"%key)
+        cg = apply_dropout(cg, dropout_target, 0.5)
+        target_cost = cg.outputs[0]
+    else:
+        target_cost = cost
+
     algorithm = GradientDescent(
-        cost=cost, params=cg.parameters,
+        cost=target_cost, params=cg.parameters,
         step_rule=CompositeRule([StepClipping(10.), Adam(learning_rate)]))
 
     #------------------------------------------------------------
@@ -408,11 +427,7 @@ def main(name, epochs, batch_size, learning_rate,
         # model.set_param_values(LoadFromDump(old_model_name).manager.load_parameters())
     extensions += [Timing(),
                    TrainingDataMonitoring(
-                       observables,
-                       prefix="train",
-                       after_batch=True),
-                   TrainingDataMonitoring(
-                       observables, prefix="average", every_n_batches=10),
+                       observables, prefix="train", every_n_batches=10),
                    DataStreamMonitoring(
                        [cost],
                        test_stream,
@@ -452,12 +467,13 @@ if __name__ == "__main__":
     parser.add_argument("--name", type=str,
                 default="handwriting", help="Name for this experiment")
     parser.add_argument("--epochs", type=int,
-                default=100, help="Number of training epochs to do")
+                default=500, help="Number of training epochs to do")
     parser.add_argument("--bs", "--batch-size", type=int, dest="batch_size",
                 default=85, help="Size of each mini-batch."
-                                 " 85 LSTM, 178 GRU")
+                                 " For max-length=600 on GTX 980 use"
+                                 " 85 for LSTM, 178 for GRU")
     parser.add_argument("--lr", "--learning-rate", type=float,
-                        dest="learning_rate",default=1e-4 ,
+                        dest="learning_rate",default=1e-3,
                         help="Learning rate")
     parser.add_argument("--dim", type=int,
                 default=900, help="RNN state dimension")
@@ -472,6 +488,8 @@ if __name__ == "__main__":
                         help="Set if you want to use Bokeh ")
     parser.add_argument("--GRU", action='store_true', default=False,
                         help="Set if you want to use Bokeh ")
+    parser.add_argument("-d","--dropout",action='store_true',default=False,
+                        help="Use dropout")
 
     args = parser.parse_args()
 

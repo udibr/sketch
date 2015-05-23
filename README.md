@@ -6,14 +6,15 @@ see also his [demo](http://www.cs.toronto.edu/~graves/handwriting.html)
 
 Dependencies
 ------------
- * [Blocks](https://github.com/bartvm/blocks) follow
-the [install instructions](http://blocks.readthedocs.org/en/latest/setup.html).
-This will install all the other dependencies for you (Theano, Fuel, etc.).
-However I am using
-[Xavier weight initialization](https://github.com/udibr/blocks/blob/master/blocks/initialization.py#L228)
-which currently is available
-only on [my fork of blocks](https://github.com/udibr/blocks)
- * Download data set using [this notebook](./handwriting-to-hdf5.ipynb)
+* [Blocks](https://github.com/bartvm/blocks) follow
+  the [install instructions](http://blocks.readthedocs.org/en/latest/setup.html).
+  This will install all the other dependencies for you (Theano, Fuel, etc.).
+  However I am using few changes I made to blocks that are available in
+  [my fork of blocks](https://github.com/udibr/blocks). You can either install
+  my fork or copy paste the changes:
+  * [Xavier weight initialization](https://github.com/udibr/blocks/blob/master/blocks/initialization.py#L228)
+  * [Add bias to Fork class](https://github.com/udibr/blocks/blob/master/blocks/bricks/parallel.py#L101)
+* Download data set using [this notebook](./handwriting-to-hdf5.ipynb)
  
 Running code
 ------------
@@ -26,4 +27,4 @@ was raised is shown in `samples-pen.png`
 
 Notes
 -----
- * This is a work in progress
+* This is a work in progress
