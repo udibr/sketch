@@ -10,6 +10,7 @@ from blocks.bricks import Initializable, Linear
 from blocks.utils import shared_floatx
 from blocks.algorithms import StepRule
 from blocks.initialization import NdarrayInitialization
+from blocks.bricks.recurrent import LSTM
 
 # should be in blocks.initialization
 class GlorotBengio(NdarrayInitialization):
@@ -23,6 +24,8 @@ class GlorotBengio(NdarrayInitialization):
     ----------
     scale : float
         1 for linear/tanh/sigmoid. 2 for RELU
+    normal : bool
+        Perform sampling from normal distribution. By defaut use uniform.
 
     Notes
     -----
@@ -33,12 +36,16 @@ class GlorotBengio(NdarrayInitialization):
       artificial intelligence and statistics, 249-256
       http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
     """
-    def __init__(self, scale=1):
+    def __init__(self, scale=1, normal=False):
         self._scale = float(scale)
+        self._normal = normal
 
     def generate(self, rng, shape):
-        std = numpy.sqrt(self._scale/shape[-1])
-        m = rng.normal(0., std, size=shape)
+        w = numpy.sqrt(self._scale/shape[-1])
+        if self._normal:
+            m = rng.normal(0., w, size=shape)
+        else:
+            m = rng.uniform(-w, w, size=shape)
         return m.astype(theano.config.floatX)
 
 # should be in blocks.algorithms
@@ -69,8 +76,11 @@ class AdaGrad(StepRule):
         self.epsilon = epsilon
 
     def compute_step(self, param, previous_step):
+        name = 'adagrad_sqs'
+        if param.name:
+            name += '_' + param.name
         ssq = shared_floatx(param.get_value() * 0.,
-                            name='ssq_' + param.name)
+                            name=name)
 
         ssq_t = (tensor.sqr(previous_step) + ssq)
         step = (self.learning_rate * previous_step /
@@ -108,6 +118,8 @@ class RecurrentStack(BaseRecurrent, Initializable):
     def __init__(self, dim, activation=None, depth=2, name=None,
                  prototype=None, **kwargs):
         super(RecurrentStack, self).__init__(name=name, **kwargs)
+        # use the name allready processed by superclass
+        name = self.name
         self.dim = dim
         if not prototype:
             prototype = LSTM(dim, activation)
@@ -118,12 +130,12 @@ class RecurrentStack(BaseRecurrent, Initializable):
         self.depth = depth
         for d in range(self.depth):
             if d > 0:
-                layer_name = '%s_%d_%d'%(self.name,d-1,d)
+                # convert cells of previous layer to input of new layer
+                layer_name = '%s_%d_%d'%(name, d-1, d)
                 self.children.append(Linear(dim, input_dim, use_bias=True,
                                             name=layer_name))
             layer_node = copy.deepcopy(self.prototype)
-            # use the name allready processed by superclass
-            layer_node.name = '%s_%s_%d'%(self.name, layer_node.name, d)
+            layer_node.name = '%s_%s_%d'%(name, layer_node.name, d)
             self.children.append(layer_node)
 
     @recurrent(sequences=['inputs', 'mask'], states=['states', 'cells'],
@@ -159,7 +171,7 @@ class RecurrentStack(BaseRecurrent, Initializable):
         def slice_last(x, no):
             return x.T[no*self.dim: (no+1)*self.dim].T
 
-        last_cells = None
+        next_inputs = inputs
         next_states = []
         next_cells = []
         for d in range(self.depth):
@@ -167,22 +179,22 @@ class RecurrentStack(BaseRecurrent, Initializable):
             current_cells = slice_last(cells,d)
 
             if d == 0:
-                current_inputs = inputs
-                current_mask = mask
+                # SequenceGenerator has already built a linear transform in Fork
+                current_inputs = next_inputs
             else:
-                current_inputs = self.children[2*d-1].apply(last_cells)
-                current_mask = None
+                # convert cells of previous layer to input of new layer
+                current_inputs = self.children[2*d-1].apply(next_inputs)
 
             current_next_states, current_next_cells = self.children[2*d].apply(
                 inputs=current_inputs,
                 states=current_states,
                 cells=current_cells,
-                mask=current_mask,
+                mask=mask,
                 iterate=False)
             next_states.append(current_next_states)
             next_cells.append(current_next_cells)
 
-            last_cells = current_cells
+            next_inputs = current_states
 
         next_states = theano.tensor.concatenate(next_states, axis=-1)
         next_cells = theano.tensor.concatenate(next_cells, axis=-1)

@@ -29,7 +29,7 @@ from argparse import ArgumentParser
 from fuel.streams import DataStream
 from fuel.schemes import SequentialScheme, ShuffledScheme
 
-from blocks.algorithms import GradientDescent, CompositeRule, StepClipping, Adam
+from blocks.algorithms import GradientDescent, CompositeRule, StepClipping, Adam, RMSProp
 from blocks.initialization import Constant
 
 from blocks.graph import ComputationGraph, apply_dropout
@@ -275,7 +275,7 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
 #----------------------------------------------------------------------------
 def main(name, epochs, batch_size, learning_rate,
          dim, mix_dim, old_model_name, max_length, bokeh, GRU, dropout,
-         depth):
+         depth, max_grad):
 
     #----------------------------------------------------------------------
     datasource = name
@@ -293,10 +293,12 @@ def main(name, epochs, batch_size, learning_rate,
 
     if GRU:
         jobname += 'g'
-    if dropout:
-        jobname += 'D'
+    if dropout > 0.:
+        jobname += 'D%g'%dropout
     if depth > 1:
         jobname += 'N%d'%depth
+    if max_grad != 5.:
+        jobname += 'G%g'%max_grad
 
     print("\nRunning experiment %s" % jobname)
     print("         learning rate: %5.3f" % learning_rate) 
@@ -367,19 +369,21 @@ def main(name, epochs, batch_size, learning_rate,
 
     # Define the training algorithm.
     cg = ComputationGraph(cost)
-    if dropout:
-        from blocks.roles import INPUT
-        dropout_target = VariableFilter(roles=[INPUT],
-                                        bricks=[readout],
+    if dropout > 0.:
+        from blocks.roles import INPUT, OUTPUT
+        dropout_target = VariableFilter(roles=[OUTPUT],
+                                        bricks=[transition],
                                         name_regex='states')(cg.variables)
-        cg = apply_dropout(cg, dropout_target, 0.5)
-        target_cost = cg.outputs[0]
-    else:
-        target_cost = cost
+        cg = apply_dropout(cg, dropout_target, dropout)
+        cost = cg.outputs[0]
 
     algorithm = GradientDescent(
-        cost=target_cost, params=cg.parameters,
-        step_rule=CompositeRule([StepClipping(10.), AdaGrad(learning_rate)]))
+        cost=cost, params=cg.parameters,
+        step_rule=CompositeRule([StepClipping(max_grad),
+                                 # RMSProp(learning_rate,decay_rate=0.95)
+                                 Adam(learning_rate)
+                                 # AdaGrad(learning_rate)
+                                 ]))
 
     #------------------------------------------------------------
     observables = [cost]
@@ -450,9 +454,12 @@ def main(name, epochs, batch_size, learning_rate,
                        test_stream,
                        prefix="test",
                        before_training=True, after_epoch=True),
+                   # all monitored data is ready so print it...
+                   # (next steps may take more time and we want to see the
+                   # results as soon as possible so print as soon as you can)
+                   Printing(every_n_batches=10, after_epoch=True),
                    Sample(generator, steps=max_length, before_training=True,
                           after_epoch=True),
-                   Printing(every_n_batches=10, after_epoch=True),
                    Dump(jobname, after_epoch=True,every_n_batches=10),
                    ProgressBar(),
                    FinishAfter(after_n_epochs=epochs)
@@ -490,7 +497,7 @@ if __name__ == "__main__":
                                  " For max-length=600 on GTX 980 use"
                                  " 85 for LSTM, 178 for GRU")
     parser.add_argument("--lr", "--learning-rate", type=float,
-                        dest="learning_rate",default=1e-3,
+                        dest="learning_rate",default=2e-3,
                         help="Learning rate")
     parser.add_argument("--dim", type=int,
                 default=900, help="RNN state dimension")
@@ -505,10 +512,13 @@ if __name__ == "__main__":
                         help="Set if you want to use Bokeh ")
     parser.add_argument("--GRU", action='store_true', default=False,
                         help="Use GatedRecurrent network instead of LSTM.")
-    parser.add_argument("-d","--dropout",action='store_true',default=False,
-                        help="Use dropout")
+    parser.add_argument("-d","--dropout",type=float,default=0.,
+                        help="dropout. No dropout by default.")
     parser.add_argument("--depth", type=int,
                 default=1, help="Number of recurrent layers to be stacked.")
+    parser.add_argument("-G", "--max-grad", type=float,
+                        default=5.,
+                        help="Maximal gradient limit")
 
     args = parser.parse_args()
 
