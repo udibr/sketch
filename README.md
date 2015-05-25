@@ -1,6 +1,6 @@
 # sketch
 Use RNN to model handwriting using Theano blocks.
-I am trying to reproduce the simplest handwritting model given by
+I am trying to reproduce handwritting model given by
 [Alex Graves](http://arxiv.org/abs/1308.0850),
 see also his [demo](http://www.cs.toronto.edu/~graves/handwriting.html)
 
@@ -9,11 +9,6 @@ Dependencies
 * [Blocks](https://github.com/bartvm/blocks) follow
   the [install instructions](http://blocks.readthedocs.org/en/latest/setup.html).
   This will install all the other dependencies for you (Theano, Fuel, etc.).
-  However I am using few changes I made to blocks that are available in
-  [my fork of blocks](https://github.com/udibr/blocks). You can either install
-  my fork or copy paste the changes:
-  * [Xavier weight initialization](https://github.com/udibr/blocks/blob/master/blocks/initialization.py#L228)
-  * [Add bias to Parallel class](https://github.com/udibr/blocks/blob/master/blocks/bricks/parallel.py#L61)
 * Download handwritting dataset using [this notebook](./handwriting-to-hdf5.ipynb)
  
 Running code

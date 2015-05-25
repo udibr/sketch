@@ -12,6 +12,7 @@ logging.basicConfig(format=FORMAT, datefmt=DATEFMT, level=logging.INFO)
 
 import sys
 import theano
+# Automatically detect we are debugging and turn on maximal Theano debugging
 if sys.gettrace() is not None:
     print("Debugging")
     theano.config.optimizer='fast_compile' #"None"  #
@@ -29,13 +30,13 @@ from fuel.streams import DataStream
 from fuel.schemes import SequentialScheme, ShuffledScheme
 
 from blocks.algorithms import GradientDescent, CompositeRule, StepClipping, Adam
-from blocks.initialization import Orthogonal, Constant, Xavier
+from blocks.initialization import Constant
 
 from blocks.graph import ComputationGraph, apply_dropout
 from blocks.extensions import FinishAfter, Timing, Printing, ProgressBar
 from blocks.extensions.saveload import SimpleExtension
 from blocks.extensions.saveload import Dump, LoadFromDump
-from blocks.bricks import Random, Initializable
+from blocks.bricks import Random, Initializable, Linear
 from blocks.bricks.base import application
 from blocks.extensions.monitoring import DataStreamMonitoring, TrainingDataMonitoring
 from blocks.main_loop import MainLoop
@@ -45,6 +46,8 @@ from blocks.bricks.sequence_generators import SequenceGenerator, Readout
 from fuel.datasets import H5PYDataset
 from blocks.filter import VariableFilter
 from blocks.bricks.parallel import Fork
+
+from blocks_extras import GlorotBengio, AdaGrad, RecurrentStack
 
 floatX = theano.config.floatX
 fuel.config.floatX = floatX
@@ -268,9 +271,11 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
 
         return super(SketchEmitter, self).get_dim(name)
 
+
 #----------------------------------------------------------------------------
 def main(name, epochs, batch_size, learning_rate,
-         dim, mix_dim, old_model_name, max_length, bokeh, GRU, dropout):
+         dim, mix_dim, old_model_name, max_length, bokeh, GRU, dropout,
+         depth):
 
     #----------------------------------------------------------------------
     datasource = name
@@ -290,6 +295,8 @@ def main(name, epochs, batch_size, learning_rate,
         jobname += 'g'
     if dropout:
         jobname += 'D'
+    if depth > 1:
+        jobname += 'N%d'%depth
 
     print("\nRunning experiment %s" % jobname)
     print("         learning rate: %5.3f" % learning_rate) 
@@ -305,6 +312,13 @@ def main(name, epochs, batch_size, learning_rate,
         transition = GatedRecurrent(dim=dim, name="transition")
     else:
         transition = LSTM(dim=dim, name="transition")
+
+    if depth > 1:
+        transition = RecurrentStack(dim=dim,
+                                    depth=depth,
+                                    name="transition",
+                                    prototype=transition)
+
     emitter = SketchEmitter(mix_dim=mix_dim, name="emitter")
     readout = Readout(
         readout_dim=emitter.get_dim('inputs'),
@@ -313,19 +327,19 @@ def main(name, epochs, batch_size, learning_rate,
         name="readout")
     normal_inputs = [name for name in transition.apply.sequences
                      if 'mask' not in name]
-    fork = Fork(normal_inputs, use_bias=True)
+    fork = Fork(normal_inputs, prototype=Linear(use_bias=True))
     generator = SequenceGenerator(readout=readout, transition=transition,
                                   fork=fork)
 
     # Initialization settings
-    generator.weights_init = Orthogonal()
+    generator.weights_init = GlorotBengio() # Orthogonal()
     generator.biases_init = Constant(0)
 
     # for LSTM you can not use Orthogonal because it has 1D weights connecting
     # the cells to in/out/forget gates (but you can on GatedRecurrent)
-    if not GRU:
-        generator.push_initialization_config()
-        transition.weights_init = Xavier()
+    # if not GRU:
+    #     generator.push_initialization_config()
+    #     transition.weights_init = GlorotBengio()
 
     # Build the cost computation graph
     x = T.tensor3('features',dtype=floatX)[:max_length,:,:]  # [steps,batch_size, 3]
@@ -341,6 +355,11 @@ def main(name, epochs, batch_size, learning_rate,
                     [(key, value.get_value().shape) for key, value
                      in params.items()],
                     width=120))
+    model_size = 0
+    for v in params.itervalues():
+        s = v.get_value().shape
+        model_size += s[0] * (s[1] if len(s) > 1 else 1)
+    logger.info("Total number of parameters %d"%model_size)
 
     # Initialize parameters
     for brick in model.get_top_bricks():
@@ -360,7 +379,7 @@ def main(name, epochs, batch_size, learning_rate,
 
     algorithm = GradientDescent(
         cost=target_cost, params=cg.parameters,
-        step_rule=CompositeRule([StepClipping(10.), Adam(learning_rate)]))
+        step_rule=CompositeRule([StepClipping(10.), AdaGrad(learning_rate)]))
 
     #------------------------------------------------------------
     observables = [cost]
@@ -485,9 +504,11 @@ if __name__ == "__main__":
     parser.add_argument("--bokeh", action='store_true', default=False,
                         help="Set if you want to use Bokeh ")
     parser.add_argument("--GRU", action='store_true', default=False,
-                        help="Set if you want to use Bokeh ")
+                        help="Use GatedRecurrent network instead of LSTM.")
     parser.add_argument("-d","--dropout",action='store_true',default=False,
                         help="Use dropout")
+    parser.add_argument("--depth", type=int,
+                default=1, help="Number of recurrent layers to be stacked.")
 
     args = parser.parse_args()
 
