@@ -11,6 +11,7 @@ from blocks.utils import shared_floatx
 from blocks.algorithms import StepRule
 from blocks.initialization import NdarrayInitialization
 from blocks.bricks.recurrent import LSTM
+from blocks.bricks.base import application
 
 # should be in blocks.initialization
 class GlorotBengio(NdarrayInitialization):
@@ -204,3 +205,13 @@ class RecurrentStack(BaseRecurrent, Initializable):
         if name in ['inputs', 'mask']:
             return self.children[0].get_dim(name)
         return self.children[0].get_dim(name) * self.depth
+
+    @application
+    def initial_state(self, state_name, batch_size, *args, **kwargs):
+        states = []
+        for d in range(self.depth):
+            states.append(self.children[2*d].initial_state(state_name,
+                                                           batch_size,
+                                                           *args,
+                                                           **kwargs))
+        return theano.tensor.concatenate(states, axis=-1)
