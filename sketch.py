@@ -47,7 +47,7 @@ from fuel.datasets import H5PYDataset
 from blocks.filter import VariableFilter
 from blocks.bricks.parallel import Fork
 
-from blocks_extras import GlorotBengio, AdaGrad, RecurrentStack
+from blocks_extras import GlorotBengio, AdaGrad, RecurrentStack, RecurrentLSTM
 
 floatX = theano.config.floatX
 fuel.config.floatX = floatX
@@ -310,16 +310,15 @@ def main(name, epochs, batch_size, learning_rate,
         old_model_name = jobname
 
     #----------------------------------------------------------------------
-    if GRU:
+    if depth > 1:
+        transition = RecurrentLSTM(dim=dim, depth=depth, name="transition",
+                                   lstm_name="transition")
+        assert not GRU
+    elif GRU:
         transition = GatedRecurrent(dim=dim, name="transition")
     else:
         transition = LSTM(dim=dim, name="transition")
 
-    if depth > 1:
-        transition = RecurrentStack(dim=dim,
-                                    depth=depth,
-                                    name="transition",
-                                    prototype=transition)
 
     emitter = SketchEmitter(mix_dim=mix_dim, name="emitter")
     readout = Readout(
@@ -380,8 +379,8 @@ def main(name, epochs, batch_size, learning_rate,
     algorithm = GradientDescent(
         cost=cost, params=cg.parameters,
         step_rule=CompositeRule([StepClipping(max_grad),
-                                 # RMSProp(learning_rate,decay_rate=0.95)
-                                 Adam(learning_rate)
+                                 RMSProp(learning_rate,decay_rate=0.95)
+                                 # Adam(learning_rate)
                                  # AdaGrad(learning_rate)
                                  ]))
 
@@ -443,9 +442,9 @@ def main(name, epochs, batch_size, learning_rate,
     #------------------------------------------------------------
     extensions = []
     if old_model_name:
-        extensions.append(LoadFromDump(old_model_name))
+        # extensions.append(LoadFromDump(old_model_name))
         # or you can just load the weights without state using:
-        # model.set_param_values(LoadFromDump(old_model_name).manager.load_parameters())
+        model.set_param_values(LoadFromDump(old_model_name).manager.load_parameters())
     extensions += [Timing(),
                    TrainingDataMonitoring(
                        observables, prefix="train", every_n_batches=10),
