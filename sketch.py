@@ -15,8 +15,8 @@ import theano
 # Automatically detect we are debugging and turn on maximal Theano debugging
 if sys.gettrace() is not None:
     print("Debugging")
-    theano.config.optimizer='fast_compile'  # "None"
-    theano.config.exception_verbosity='high'
+    theano.config.optimizer = 'fast_compile'  # or "None"
+    theano.config.exception_verbosity = 'high'
     theano.config.compute_test_value = 'warn'
 
 import theano.tensor as T
@@ -63,11 +63,7 @@ import pprint
 # this must be a global function so we can pickle it
 import math
 def _is_nan(log):
-    for v in log.current_row.itervalues():
-        if isinstance(v, float) and math.isnan(v):
-            return True
-    return False
-    # return math.isnan(log.current_row.get('train_total_gradient_norm',0.))
+    return any(v != v for v in log.current_row.itervalues())
 
 def _transpose(data):
     return tuple(np.swapaxes(array,0,1) for array in data)
@@ -87,7 +83,7 @@ def drawpoints(points,pad=0):
     ys=[]
     x=[]
     y=[]
-    for xy,s in zip(xys,skips):
+    for xy,s in zip(xys, skips):
         if s:
             if x is not None:
                 xs.append(x)
@@ -97,15 +93,15 @@ def drawpoints(points,pad=0):
         x.append(xy[0])
         y.append(xy[1])
 
-    for x,y in zip(xs,ys):
+    for x,y in zip(xs, ys):
         if len(x) > 1:
-            pl.plot(x,y,'k-')
+            pl.plot(x, y, 'k-')
 
     xmin,ymin = xys.min(axis=0)
     xmax,ymax = xys.max(axis=0)
     ax = pl.gca()
-    ax.set_xlim(xmin-pad,xmax+pad)
-    ax.set_ylim(ymin-pad,ymax+pad)
+    ax.set_xlim(xmin-pad, xmax + pad)
+    ax.set_ylim(ymin-pad, ymax + pad)
     ax.invert_yaxis()
     ax.set_xticks([])
     ax.set_yticks([])
@@ -166,33 +162,41 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
     Parameters
     ----------
     mix_dim : int the number of gaussians to mix
-    initial_output : int or a scalar :class:`~theano.Variable`
-        The initial output.
 
     """
-    def __init__(self, mix_dim=20, initial_output=0, **kwargs):
-        self.initial_output = initial_output
+    def __init__(self, mix_dim=20, **kwargs):
         self.mix_dim = mix_dim
+        self.epsilon = 1e-8
         super(SketchEmitter, self).__init__(**kwargs)
 
     def components(self, readouts):
         """
-        All steps or single step
+        Take components from readout.
 
-        :param readouts: [batch_size,get_dim('inputs')] or [steps,batch_size,get_dim('inputs')]
-        :return: mean=[steps*batch_size,mix_dim,2], sigma=[steps*batch_size,mix_dim,2],
-                corr=[steps*batch_size,mix_dim], weight=[steps*batch_size,mix_dim],
-                penup=[steps*batch_size,1]
+        If we have steps flatten steps,bacth_size to steps*batch_size
+
+        :param readouts: [batch_size,get_dim('inputs')] or
+         [steps,batch_size,get_dim('inputs')]
+        :return: mean=[steps*batch_size,mix_dim,2],
+         sigma=[steps*batch_size,mix_dim,2],
+         corr=[steps*batch_size,mix_dim],
+         weight=[steps*batch_size,mix_dim],
+         penup=[steps*batch_size,1]
         """
         mix_dim = self.mix_dim  # get_dim('mix')
         output_norm = 2*mix_dim  # x,y
         readouts = readouts.reshape((-1, self.get_dim('inputs')))
 
-        mean = readouts[:,0:output_norm].reshape((-1,mix_dim,2))  #20
-        sigma = T.exp(readouts[:,output_norm:2*output_norm].reshape((-1,mix_dim,2))) + 1e-3  #21
-        corr = T.tanh(readouts[:,2*output_norm:2*output_norm+mix_dim])  #22 [batch_size,mix_dim]
-        weight = T.nnet.softmax(readouts[:,2*output_norm+mix_dim:2*output_norm+2*mix_dim]) #19 [batch_size,mix_dim]
-        penup = T.nnet.sigmoid(readouts[:,2*output_norm+2*mix_dim:])  # 18 [batch_size,1]
+        mean = readouts[:,0:output_norm].reshape((-1,mix_dim,2))  # 20
+        sigma = T.exp(readouts[:,output_norm:2*output_norm]
+                      .reshape((-1,mix_dim,2)))  # 21
+        # [batch_size,mix_dim]
+        corr = T.tanh(readouts[:,2*output_norm:2*output_norm+mix_dim])  # 22
+        # [batch_size,mix_dim]
+        weight = T.nnet.softmax(
+            readouts[:,2*output_norm+mix_dim:2*output_norm+2*mix_dim])  # 19
+        # [batch_size,1]
+        penup = T.nnet.sigmoid(readouts[:,2*output_norm+2*mix_dim:])  # 18
 
         return mean, sigma, corr, weight, penup
 
@@ -211,7 +215,7 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
             size=(batch_size, mix_dim, 2),
             avg=0., std=1.) #, dtype=floatX)
 
-        c = (1 - T.sqrt(1-corr**2))/(corr + 1e-12)
+        c = (1 - T.sqrt(1-corr**2))/(corr + self.epsilon)
         c = c.dimshuffle((0, 1, 'x'))  # same for x and y
         nr = nr + nr[:,:,::-1]*c  # x+c*y and y + c*x
 
@@ -245,34 +249,36 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
          [steps,batch_size,input_dim]
         :param outputs: sketch cordinates of next time period batch_size,3] or
          [steps, batch_size,3]
-        :return: NLL [steps*batch_size]
+        :return: NLL [batch_size] or [steps,batch_size]
         """
         nll_ndim = readouts.ndim - 1
         nll_shape = readouts.shape[:-1]
+        # if we have steps flatten steps,bacth_size to steps*batch_size
         outputs = outputs.reshape((-1,3))
         mean, sigma, corr, weight, penup = self.components(readouts)
 
         # duplicate the output over all mix_dim
         d = outputs[:,:2].dimshuffle((0, 'x', 1)) - mean  # 25
         # [batch_size,mix_dim]
-        sigma2 = sigma[:,:,0] * sigma[:,:,1]  # 25
+        sigma2 = sigma[:,:,0] * sigma[:,:,1] + self.epsilon  # 25
         z = d ** 2 / sigma ** 2
         # [batch_size,mix_dim]
         z = z.sum(axis=-1) - 2 * corr * (d[:,:,0] * d[:,:,1]) / sigma2  # 25
-        corr1 = 1 - corr ** 2 + 1e-6 #24
+        corr1 = 1 - corr ** 2 + self.epsilon  # 24
         n = - z / (2 * corr1)  # 24 [batch_size,mix_dim]
         nmax = n.max(axis=-1, keepdims=True)
         n = n - nmax
         n = T.exp(n) / (2*np.pi*sigma2*T.sqrt(corr1))  # 24
         # [batch_size]
-        nll = -T.log((n * weight).sum(axis=-1, keepdims=True) + 1e-8) - nmax +\
-              T.nnet.binary_crossentropy(penup, outputs[:,2:])  # 26
+        nll = -T.log((n * weight).sum(axis=-1, keepdims=True) + self.epsilon)
+        nll -= nmax
+        nll += T.nnet.binary_crossentropy(penup, outputs[:,2:])  # 26
 
         return nll.reshape(nll_shape, ndim=nll_ndim)
 
     @application
     def initial_outputs(self, batch_size):
-        return T.ones((batch_size,3)) * self.initial_output
+        return T.zeros((batch_size,3))
 
     def get_dim(self, name):
         if name == 'inputs':
