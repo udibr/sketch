@@ -164,9 +164,9 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
     mix_dim : int the number of gaussians to mix
 
     """
-    def __init__(self, mix_dim=20, **kwargs):
+    def __init__(self, mix_dim=20, epsilon=1e-5, **kwargs):
         self.mix_dim = mix_dim
-        self.epsilon = 1e-8
+        self.epsilon = epsilon
         super(SketchEmitter, self).__init__(**kwargs)
 
     def components(self, readouts):
@@ -292,7 +292,7 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
 #----------------------------------------------------------------------------
 def main(name, epochs, batch_size, learning_rate,
          dim, mix_dim, old_model_name, max_length, bokeh, GRU, dropout,
-         depth, max_grad, step_method):
+         depth, max_grad, step_method, epsilon):
 
     #----------------------------------------------------------------------
     datasource = name
@@ -303,17 +303,15 @@ def main(name, epochs, batch_size, learning_rate,
         """
         return '0' if x <= 0 else '%s%d' % (("%e"%x)[0], -np.floor(np.log10(x)))
 
-    jobname = "%s-d%d-m%d-lr%s-b%d" % (datasource, dim, mix_dim,
-                                       shnum(learning_rate), batch_size)
+    jobname = "%s-%dX%dm%dd%dr%sb%de%s" % (datasource, depth, dim, mix_dim,
+                                           int(dropout*10),
+                                           shnum(learning_rate), batch_size,
+                                           shnum(epsilon))
     if max_length != 600:
         jobname += '-L%d'%max_length
 
     if GRU:
         jobname += 'g'
-    if dropout > 0.:
-        jobname += 'D%g'%dropout
-    if depth > 1:
-        jobname += 'N%d'%depth
     if max_grad != 5.:
         jobname += 'G%g'%max_grad
     if step_method != 'adam':
@@ -335,7 +333,9 @@ def main(name, epochs, batch_size, learning_rate,
         transition = LSTM(dim=dim, name="transition")
 
 
-    emitter = SketchEmitter(mix_dim=mix_dim, name="emitter")
+    emitter = SketchEmitter(mix_dim=mix_dim,
+                            epsilon=epsilon,
+                            name="emitter")
     readout = Readout(
         readout_dim=emitter.get_dim('inputs'),
         source_names=['states'],
@@ -527,14 +527,14 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int,
                 default=500, help="Number of training epochs to do")
     parser.add_argument("--bs", "--batch-size", type=int, dest="batch_size",
-                default=85, help="Size of each mini-batch."
+                default=56, help="Size of each mini-batch."
                                  " For max-length=600 on GTX 980 use"
                                  " 85 for LSTM, 178 for GRU")
     parser.add_argument("--lr", "--learning-rate", type=float,
-                        dest="learning_rate",default=2e-3,
+                        dest="learning_rate",default=1e-4,
                         help="Learning rate")
     parser.add_argument("--dim", type=int,
-                default=900, help="RNN state dimension")
+                default=700, help="RNN state dimension")
     parser.add_argument("--mix-dim", type=int,
                 default=20, help="number of gaussian mixtures")
     parser.add_argument("--model", type=str, dest="old_model_name",
@@ -546,16 +546,18 @@ if __name__ == "__main__":
                         help="Set if you want to use Bokeh ")
     parser.add_argument("--GRU", action='store_true', default=False,
                         help="Use GatedRecurrent network instead of LSTM.")
-    parser.add_argument("-d","--dropout",type=float,default=0.,
-                        help="dropout. No dropout by default.")
+    parser.add_argument("-d","--dropout",type=float,default=0.5,
+                        help="dropout. Set to 0 for no dropout")
     parser.add_argument("--depth", type=int,
-                default=1, help="Number of recurrent layers to be stacked.")
+                default=3, help="Number of recurrent layers to be stacked.")
     parser.add_argument("-G", "--max-grad", type=float,
-                        default=5.,
+                        default=10.,
                         help="Maximal gradient limit")
     parser.add_argument("--step-method", type=str, default="adam",
                         help="what gradient step rule to use."
                              " Default adam or scale, rmsprop, adagrad")
+    parser.add_argument("--epsilon",type=float,default=1e-5,
+                        help="Epsilon value for mixture of gaussians")
 
     args = parser.parse_args()
 
