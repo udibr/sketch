@@ -15,7 +15,7 @@ import theano
 # Automatically detect we are debugging and turn on maximal Theano debugging
 if sys.gettrace() is not None:
     print("Debugging")
-    theano.config.optimizer='fast_compile' #"None"  #
+    theano.config.optimizer='fast_compile'  # "None"
     theano.config.exception_verbosity='high'
     theano.config.compute_test_value = 'warn'
 
@@ -29,7 +29,8 @@ from argparse import ArgumentParser
 from fuel.streams import DataStream
 from fuel.schemes import SequentialScheme, ShuffledScheme
 
-from blocks.algorithms import GradientDescent, CompositeRule, StepClipping, Adam, RMSProp
+from blocks.algorithms import GradientDescent, CompositeRule, StepClipping
+from blocks.algorithms import Adam, RMSProp, AdaGrad, Scale
 from blocks.initialization import Constant
 
 from blocks.graph import ComputationGraph, apply_dropout
@@ -38,7 +39,8 @@ from blocks.extensions.saveload import SimpleExtension
 from blocks.extensions.saveload import Dump, LoadFromDump
 from blocks.bricks import Random, Initializable, Linear
 from blocks.bricks.base import application
-from blocks.extensions.monitoring import DataStreamMonitoring, TrainingDataMonitoring
+from blocks.extensions.monitoring import DataStreamMonitoring
+from blocks.extensions.monitoring import TrainingDataMonitoring
 from blocks.main_loop import MainLoop
 from blocks.model import Model
 from blocks.bricks.recurrent import LSTM, GatedRecurrent
@@ -47,12 +49,12 @@ from fuel.datasets import H5PYDataset
 from blocks.filter import VariableFilter
 from blocks.bricks.parallel import Fork
 
-from blocks_extras import GlorotBengio, AdaGrad, RecurrentStack, RecurrentLSTM
+from blocks_extras import GlorotBengio, LSTMstack
 
 floatX = theano.config.floatX
 fuel.config.floatX = floatX
 from fuel.transformers import Mapping
-from blocks.utils import named_copy, dict_union
+from blocks.utils import named_copy
 logger = logging.getLogger(__name__)
 from blocks.extensions.plot import Plot
 import pprint
@@ -61,7 +63,11 @@ import pprint
 # this must be a global function so we can pickle it
 import math
 def _is_nan(log):
-    return math.isnan(log.current_row.get('total_gradient_norm',0.))
+    for v in log.current_row.itervalues():
+        if isinstance(v, float) and math.isnan(v):
+            return True
+    return False
+    # return math.isnan(log.current_row.get('train_total_gradient_norm',0.))
 
 def _transpose(data):
     return tuple(np.swapaxes(array,0,1) for array in data)
@@ -134,7 +140,7 @@ class Sample(SimpleExtension):
         for i in range(batch_size):
             pl.subplot(self.N,self.N,i+1)
             drawpoints(outputs[:,i,:])
-        fname = '%s-sketch.png'%self.path
+        fname = os.path.join(self.path,'sketch.png')
         print('Writting to %s'%fname)
         pl.savefig(fname)
 
@@ -147,7 +153,7 @@ class Sample(SimpleExtension):
         pl.xlabel('iteration')
         pl.ylabel('sample')
         pl.title('Pen down for different samples vs. iteration step')
-        fname = '%s-pen.png'%self.path
+        fname = os.path.join(self.path,'pen.png')
         print('Writting to %s'%fname)
         pl.savefig(fname)
 
@@ -212,15 +218,14 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
         nr = nr / T.sqrt(1+c**2)
         nr = nr * sigma
         nr = nr + mean
-        # If I dont do dtype=floatX in the next line I get:
-        #   File ".../github/Theano/theano/scan_module/scan_op.py", line 476, in make_node
-        #    inner_sitsot_out.type.dtype))
-        # ValueError: When compiling the inner function of scan the following error has been encountered: The initial state (`outputs_info` in scan nomenclature) of variable IncSubtensor{Set;:int64:}.0 (argument number 0) has dtype float32, while the result of the inner function (`fn`) has dtype float64. This can happen if the inner function of scan results in an upcast or downcast.
+        # If I dont do dtype=floatX in the next line I get an error
         weight = self.theano_rng.multinomial(pvals=weight, dtype=floatX)
+        # an alternative is the following code:
         # right_boundry = T.cumsum(weight,axis=1)  # [...,1]
         # left_boundry = right_boundry - weight  # [0,...]
         # un0 = self.theano_rng.uniform(size=(batch_size,)).dimshuffle((0, 'x'))
-        # weight = T.cast(left_boundry <= un0, floatX) * T.cast(un0 < right_boundry, floatX)  # 1 only in one bin
+        # weight = T.cast(left_boundry <= un0, floatX) * \
+        #          T.cast(un0 < right_boundry, floatX)  # 1 only in one bin
 
         xy = nr * weight[:,:,None]  # [batch_size,mix_dim,2]
 
@@ -236,8 +241,10 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
         """
         All steps or single step
 
-        :param readouts: output of hidden layer [batch_size,input_dim] or [steps,batch_size,input_dim]
-        :param outputs: sketch cordinates of next time period batch_size,3] or [steps, batch_size,3]
+        :param readouts: output of hidden layer [batch_size,input_dim] or
+         [steps,batch_size,input_dim]
+        :param outputs: sketch cordinates of next time period batch_size,3] or
+         [steps, batch_size,3]
         :return: NLL [steps*batch_size]
         """
         nll_ndim = readouts.ndim - 1
@@ -245,23 +252,27 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
         outputs = outputs.reshape((-1,3))
         mean, sigma, corr, weight, penup = self.components(readouts)
 
-        d = outputs[:,:2].dimshuffle((0, 'x', 1)) - mean  #25 duplicate the output over all mix_dim
-        sigma2 = sigma[:,:,0] * sigma[:,:,1]  #25 [batch_size,mix_dim]
+        # duplicate the output over all mix_dim
+        d = outputs[:,:2].dimshuffle((0, 'x', 1)) - mean  # 25
+        # [batch_size,mix_dim]
+        sigma2 = sigma[:,:,0] * sigma[:,:,1]  # 25
         z = d ** 2 / sigma ** 2
-        z = z.sum(axis=-1) - 2 * corr * (d[:,:,0] * d[:,:,1]) / sigma2  #25 [batch_size,mix_dim]
+        # [batch_size,mix_dim]
+        z = z.sum(axis=-1) - 2 * corr * (d[:,:,0] * d[:,:,1]) / sigma2  # 25
         corr1 = 1 - corr ** 2 + 1e-6 #24
-        n = - z / (2 * corr1)  #24 [batch_size,mix_dim]
+        n = - z / (2 * corr1)  # 24 [batch_size,mix_dim]
         nmax = n.max(axis=-1, keepdims=True)
         n = n - nmax
-        n = T.exp(n) / (2*np.pi*sigma2*T.sqrt(corr1))  #24
+        n = T.exp(n) / (2*np.pi*sigma2*T.sqrt(corr1))  # 24
+        # [batch_size]
         nll = -T.log((n * weight).sum(axis=-1, keepdims=True) + 1e-8) - nmax +\
-              T.nnet.binary_crossentropy(penup, outputs[:,2:]) #26 [batch_size]
+              T.nnet.binary_crossentropy(penup, outputs[:,2:])  # 26
 
         return nll.reshape(nll_shape, ndim=nll_ndim)
 
     @application
     def initial_outputs(self, batch_size):
-        return T.ones((batch_size,3)) * self.initial_output #, dtype=floatX
+        return T.ones((batch_size,3)) * self.initial_output
 
     def get_dim(self, name):
         if name == 'inputs':
@@ -275,13 +286,13 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
 #----------------------------------------------------------------------------
 def main(name, epochs, batch_size, learning_rate,
          dim, mix_dim, old_model_name, max_length, bokeh, GRU, dropout,
-         depth, max_grad):
+         depth, max_grad, step_method):
 
     #----------------------------------------------------------------------
     datasource = name
 
     def shnum(x):
-        """ Convert a positive float into a short tag-usable string representation.
+        """ Convert a positive float into a short tag-usable string
              E.g.: 0 -> 0, 0.005 -> 53, 100 -> 1-2
         """
         return '0' if x <= 0 else '%s%d' % (("%e"%x)[0], -np.floor(np.log10(x)))
@@ -299,19 +310,17 @@ def main(name, epochs, batch_size, learning_rate,
         jobname += 'N%d'%depth
     if max_grad != 5.:
         jobname += 'G%g'%max_grad
-
+    if step_method != 'adam':
+        jobname += step_method
     print("\nRunning experiment %s" % jobname)
     print("         learning rate: %5.3f" % learning_rate) 
     print("             dimension: %d" % dim)
     print("         mix dimension: %d" % mix_dim)
     print()
 
-    if old_model_name == 'continue':
-        old_model_name = jobname
-
     #----------------------------------------------------------------------
     if depth > 1:
-        transition = RecurrentLSTM(dim=dim, depth=depth, name="transition",
+        transition = LSTMstack(dim=dim, depth=depth, name="transition",
                                    lstm_name="transition")
         assert not GRU
     elif GRU:
@@ -342,8 +351,8 @@ def main(name, epochs, batch_size, learning_rate,
     #     generator.push_initialization_config()
     #     transition.weights_init = GlorotBengio()
 
-    # Build the cost computation graph
-    x = T.tensor3('features',dtype=floatX)[:max_length,:,:]  # [steps,batch_size, 3]
+    # Build the cost computation graph [steps,batch_size, 3]
+    x = T.tensor3('features',dtype=floatX)[:max_length,:,:]
     x.tag.test_value = np.ones((max_length,batch_size,3)).astype(np.float32)
     cost = generator.cost(x)
     cost.name = "sequence_log_likelihood"
@@ -376,13 +385,22 @@ def main(name, epochs, batch_size, learning_rate,
         cg = apply_dropout(cg, dropout_target, dropout)
         cost = cg.outputs[0]
 
+    if step_method == 'adam':
+        step_rule = Adam(learning_rate)
+    elif step_method == 'rmsprop':
+        step_rule = RMSProp(learning_rate,decay_rate=0.95)
+    elif step_method == 'adagrad':
+        step_rule = AdaGrad(learning_rate)
+    elif step_method == 'scale':
+        step_rule = Scale(learning_rate=0.1)
+    else:
+        raise Exception('Unknown sttep method %s'%step_method)
+
+    step_rule = CompositeRule([StepClipping(max_grad), step_rule])
+
     algorithm = GradientDescent(
         cost=cost, params=cg.parameters,
-        step_rule=CompositeRule([StepClipping(max_grad),
-                                 RMSProp(learning_rate,decay_rate=0.95)
-                                 # Adam(learning_rate)
-                                 # AdaGrad(learning_rate)
-                                 ]))
+        step_rule=step_rule)
 
     #------------------------------------------------------------
     observables = [cost]
@@ -435,31 +453,42 @@ def main(name, epochs, batch_size, learning_rate,
         for batch in itr:
             batch_count += 1
             examples_count += batch['features'].shape[1]
-        print('%s #batch %d #examples %d' % (label, batch_count, examples_count))
+        print('%s #batch %d #examples %d' %
+              (label, batch_count, examples_count))
 
     stream_stats(train_stream, 'train')
     stream_stats(test_stream, 'test')
     #------------------------------------------------------------
     extensions = []
-    if old_model_name:
-        # extensions.append(LoadFromDump(old_model_name))
+    if old_model_name == 'continue':
+        extensions.append(LoadFromDump(jobname))
+    elif old_model_name:
         # or you can just load the weights without state using:
-        model.set_param_values(LoadFromDump(old_model_name).manager.load_parameters())
-    extensions += [Timing(),
+        params = LoadFromDump(old_model_name).manager.load_parameters()
+        model.set_param_values(params)
+    extensions += [Timing(every_n_batches=10),
                    TrainingDataMonitoring(
-                       observables, prefix="train", every_n_batches=10),
+                       observables, prefix="train",
+                       every_n_batches=10),
                    DataStreamMonitoring(
                        [cost],
                        test_stream,
                        prefix="test",
-                       before_training=True, after_epoch=True),
+                       on_resumption=True,
+                       after_epoch=False,  # by default this is True
+                       every_n_batches=100),
                    # all monitored data is ready so print it...
                    # (next steps may take more time and we want to see the
                    # results as soon as possible so print as soon as you can)
-                   Printing(every_n_batches=10, after_epoch=True),
-                   Sample(generator, steps=max_length, before_training=True,
-                          after_epoch=True),
-                   Dump(jobname, after_epoch=True,every_n_batches=10),
+                   Printing(every_n_batches=10),
+                   # perform multiple dumps at different intervals
+                   # so if one of them breaks (has nan) we can hopefully
+                   # find a model from few batches ago in the other
+                   Dump(jobname, every_n_batches=11),
+                   Dump(jobname+'.test', every_n_batches=100),
+                   Sample(generator, steps=max_length,
+                          path=jobname+'.test',
+                          every_n_batches=100),
                    ProgressBar(),
                    FinishAfter(after_n_epochs=epochs)
                     # This shows a way to handle NaN emerging during
@@ -518,6 +547,9 @@ if __name__ == "__main__":
     parser.add_argument("-G", "--max-grad", type=float,
                         default=5.,
                         help="Maximal gradient limit")
+    parser.add_argument("--step-method", type=str, default="adam",
+                        help="what gradient step rule to use."
+                             " Default adam or scale, rmsprop, adagrad")
 
     args = parser.parse_args()
 
