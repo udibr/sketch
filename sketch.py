@@ -30,7 +30,7 @@ from fuel.streams import DataStream
 from fuel.schemes import SequentialScheme, ShuffledScheme
 
 from blocks.algorithms import GradientDescent, CompositeRule, StepClipping
-from blocks.algorithms import Adam, RMSProp, AdaGrad, Scale
+from blocks.algorithms import Adam, RMSProp, AdaGrad, Scale, AdaDelta
 from blocks.initialization import Constant
 
 from blocks.graph import ComputationGraph, apply_dropout
@@ -49,7 +49,7 @@ from fuel.datasets import H5PYDataset
 from blocks.filter import VariableFilter
 from blocks.bricks.parallel import Fork
 
-from blocks_extras import GlorotBengio, LSTMstack
+from blocks_extras import OrthogonalGlorot, GlorotBengio, LSTMstack
 
 floatX = theano.config.floatX
 fuel.config.floatX = floatX
@@ -317,10 +317,6 @@ def main(name, epochs, batch_size, learning_rate,
     if step_method != 'adam':
         jobname += step_method
     print("\nRunning experiment %s" % jobname)
-    print("         learning rate: %5.3f" % learning_rate) 
-    print("             dimension: %d" % dim)
-    print("         mix dimension: %d" % mix_dim)
-    print()
 
     #----------------------------------------------------------------------
     if depth > 1:
@@ -348,14 +344,8 @@ def main(name, epochs, batch_size, learning_rate,
                                   fork=fork)
 
     # Initialization settings
-    generator.weights_init = GlorotBengio() # Orthogonal()
+    generator.weights_init = OrthogonalGlorot()
     generator.biases_init = Constant(0)
-
-    # for LSTM you can not use Orthogonal because it has 1D weights connecting
-    # the cells to in/out/forget gates (but you can on GatedRecurrent)
-    # if not GRU:
-    #     generator.push_initialization_config()
-    #     transition.weights_init = GlorotBengio()
 
     # Build the cost computation graph [steps,batch_size, 3]
     x = T.tensor3('features',dtype=floatX)[:max_length,:,:]
@@ -397,6 +387,8 @@ def main(name, epochs, batch_size, learning_rate,
         step_rule = RMSProp(learning_rate,decay_rate=0.95)
     elif step_method == 'adagrad':
         step_rule = AdaGrad(learning_rate)
+    elif step_method == 'adadelta':
+        step_rule = AdaDelta()
     elif step_method == 'scale':
         step_rule = Scale(learning_rate=0.1)
     else:
@@ -555,7 +547,8 @@ if __name__ == "__main__":
                         help="Maximal gradient limit")
     parser.add_argument("--step-method", type=str, default="adam",
                         help="what gradient step rule to use."
-                             " Default adam or scale, rmsprop, adagrad")
+                             " Default adam or"
+                             " scale, rmsprop, adagrad, adadelta")
     parser.add_argument("--epsilon",type=float,default=1e-5,
                         help="Epsilon value for mixture of gaussians")
 

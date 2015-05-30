@@ -9,7 +9,7 @@ from blocks.bricks.recurrent import BaseRecurrent, recurrent
 from blocks.bricks import Initializable, Linear
 from blocks.utils import shared_floatx
 from blocks.algorithms import StepRule
-from blocks.initialization import NdarrayInitialization
+from blocks.initialization import NdarrayInitialization, Orthogonal
 from blocks.bricks.recurrent import LSTM
 from blocks.bricks.base import application
 
@@ -52,6 +52,28 @@ class GlorotBengio(NdarrayInitialization):
         else:
             m = rng.uniform(-w, w, size=shape)
         return m.astype(theano.config.floatX)
+
+
+class OrthogonalGlorot(GlorotBengio):
+    """Initialize a random orthogonal matrix.
+
+
+    """
+    def __init__(self, *args, **kwargs):
+        super(OrthogonalGlorot,self).__init__(*args, **kwargs)
+        self.orth = Orthogonal()
+
+    def generate(self, rng, shape):
+        if len(shape) == 1:
+            return super(OrthogonalGlorot,self).generate(rng,shape)
+
+        N = shape[0]
+        M = shape[1] // N
+        if M > 1 and len(shape) == 2 and shape[1] == M*N:
+            res = [self.orth.generate(rng,(N,N)) for i in range(M)]
+            return numpy.concatenate(res,axis=-1)
+
+        return self.orth.generate(rng, shape)
 
 # should be in blocks.bricks.recurrent
 class LSTMstack(BaseRecurrent, Initializable):
