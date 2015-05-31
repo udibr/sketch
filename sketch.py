@@ -74,7 +74,7 @@ matplotlib.use('Agg')  # allow plotting without a graphic display
 from matplotlib import pylab as pl
 from pylab import cm
 
-def drawpoints(points,pad=0):
+def drawpoints(points, xmin, ymin, xmax, ymax, pad=0):
     skips = np.hstack((np.array([0]),points[:,2]))
     xys = np.vstack((np.zeros((1,2)),np.cumsum(points[:,:2],axis=0)))
 #     xys = points[:,:2]
@@ -97,8 +97,8 @@ def drawpoints(points,pad=0):
         if len(x) > 1:
             pl.plot(x, y, 'k-')
 
-    xmin,ymin = xys.min(axis=0)
-    xmax,ymax = xys.max(axis=0)
+    # xmin,ymin = xys.min(axis=0)
+    # xmax,ymax = xys.max(axis=0)
     ax = pl.gca()
     ax.set_xlim(xmin-pad, xmax + pad)
     ax.set_ylim(ymin-pad, ymax + pad)
@@ -130,14 +130,27 @@ class Sample(SimpleExtension):
 
         res = self.sample()
         outputs = res[-2]
+
+        mins = []
+        maxs = []
+        for i in range(batch_size):
+            points = outputs[:,i,:]
+            xys = np.vstack((np.zeros((1,2)),np.cumsum(points[:,:2],axis=0)))
+            mins.append(xys.min(axis=0))
+            maxs.append(xys.max(axis=0))
+        xmin, ymin = np.array(mins).min(axis=0)
+        xmax, ymax = np.array(maxs).max(axis=0)
+
         pl.close('all')
         fig = pl.figure('Sample sketches')
-        fig.set_size_inches(16,16)
+        fig.set_size_inches(30,25)
         for i in range(batch_size):
-            pl.subplot(self.N,self.N,i+1)
-            drawpoints(outputs[:,i,:])
+            pl.subplot(self.N*2,self.N//2,i+1)
+            drawpoints(outputs[:,i,:], xmin, ymin, xmax, ymax)
         fname = os.path.join(self.path,'sketch.png')
         print('Writting to %s'%fname)
+        pl.subplots_adjust(left=0.01,right=0.99,bottom=0.01,top=0.99,
+                           wspace=0.01,hspace=0.01)
         pl.savefig(fname)
 
         fig = pl.figure('Pen down')
@@ -292,7 +305,7 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
 #----------------------------------------------------------------------------
 def main(name, epochs, batch_size, learning_rate,
          dim, mix_dim, old_model_name, max_length, bokeh, GRU, dropout,
-         depth, max_grad, step_method, epsilon):
+         depth, max_grad, step_method, epsilon, sample):
 
     #----------------------------------------------------------------------
     datasource = name
@@ -316,7 +329,11 @@ def main(name, epochs, batch_size, learning_rate,
         jobname += 'G%g'%max_grad
     if step_method != 'adam':
         jobname += step_method
-    print("\nRunning experiment %s" % jobname)
+
+    if sample:
+        print("Sampling")
+    else:
+        print("\nRunning experiment %s" % jobname)
 
     #----------------------------------------------------------------------
     if depth > 1:
@@ -367,10 +384,24 @@ def main(name, epochs, batch_size, learning_rate,
         model_size += s[0] * (s[1] if len(s) > 1 else 1)
     logger.info("Total number of parameters %d"%model_size)
 
-    # Initialize parameters
-    for brick in model.get_top_bricks():
-        brick.initialize()
+    #------------------------------------------------------------
+    extensions = []
+    if old_model_name == 'continue':
+        extensions.append(LoadFromDump(jobname))
+    elif old_model_name:
+        # or you can just load the weights without state using:
+        params = LoadFromDump(old_model_name).manager.load_parameters()
+        model.set_param_values(params)
+    else:
+        # Initialize parameters
+        for brick in model.get_top_bricks():
+            brick.initialize()
 
+    if sample:
+        Sample(generator, steps=max_length, path='.').do(None)
+        exit(0)
+
+    #------------------------------------------------------------
     # Define the training algorithm.
     cg = ComputationGraph(cost)
     if dropout > 0.:
@@ -456,14 +487,7 @@ def main(name, epochs, batch_size, learning_rate,
 
     stream_stats(train_stream, 'train')
     stream_stats(test_stream, 'test')
-    #------------------------------------------------------------
-    extensions = []
-    if old_model_name == 'continue':
-        extensions.append(LoadFromDump(jobname))
-    elif old_model_name:
-        # or you can just load the weights without state using:
-        params = LoadFromDump(old_model_name).manager.load_parameters()
-        model.set_param_values(params)
+
     extensions += [Timing(every_n_batches=10),
                    TrainingDataMonitoring(
                        observables, prefix="train",
@@ -551,6 +575,8 @@ if __name__ == "__main__":
                              " scale, rmsprop, adagrad, adadelta")
     parser.add_argument("--epsilon",type=float,default=1e-5,
                         help="Epsilon value for mixture of gaussians")
+    parser.add_argument("--sample", action='store_true', default=False,
+                        help="Just generate a sample without traning.")
 
     args = parser.parse_args()
 
