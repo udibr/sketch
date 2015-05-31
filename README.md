@@ -34,8 +34,8 @@ python sketch.py --dim 900 --depth 1 --bs 56 --lr 3e-4 -G 10 --model handwriting
 python sketch.py --dim 900 --depth 1 --bs 56 --lr 1e-4 -G 10 --model handwriting-1X900m20d5r34b56e15G10
    Running experiment handwriting-1X900m20d5r14b56e15G10
    ...
-   Epoch 144, step 120
-   test_sequence_log_likelihood: -1481.65966797
+   Epoch 153, step 165
+   test_sequence_log_likelihood: -1482.28918457
 ```
 
  ![samples](sketch.png)

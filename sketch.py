@@ -390,14 +390,15 @@ def main(name, epochs, batch_size, learning_rate,
         extensions.append(LoadFromDump(jobname))
     elif old_model_name:
         # or you can just load the weights without state using:
-        params = LoadFromDump(old_model_name).manager.load_parameters()
-        model.set_param_values(params)
+        old_params = LoadFromDump(old_model_name).manager.load_parameters()
+        model.set_param_values(old_params)
     else:
         # Initialize parameters
         for brick in model.get_top_bricks():
             brick.initialize()
 
     if sample:
+        assert old_model_name and old_model_name != 'continue'
         Sample(generator, steps=max_length, path='.').do(None)
         exit(0)
 
