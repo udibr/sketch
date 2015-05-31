@@ -1,4 +1,6 @@
 # sketch
+Project https://github.com/udibr/sketch
+
 Use RNN to model handwriting using Theano blocks.
 I am trying to reproduce handwriting model given by
 [Alex Graves](http://arxiv.org/abs/1308.0850),
@@ -36,6 +38,10 @@ python sketch.py --dim 900 --depth 1 --bs 56 --lr 1e-4 -G 10 --model handwriting
    ...
    Epoch 153, step 165
    test_sequence_log_likelihood: -1482.28918457
+python sketch.py --dim 900 --depth 1 --bs 56 --lr 1e-5  -G 10 --model handwriting-1X900m20d5r14b56e15G10
+   Epoch 11, step 84
+   test_sequence_log_likelihood: -1607.07531738
 ```
+The result directory can be downloaded [here](https://s3.amazonaws.com/udisketch/handwriting-1X900m20d5r15b56e15G10.tgz)
 
  ![samples](sketch.png)
