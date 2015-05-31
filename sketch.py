@@ -74,9 +74,10 @@ matplotlib.use('Agg')  # allow plotting without a graphic display
 from matplotlib import pylab as pl
 from pylab import cm
 
-def drawpoints(points, xmin, ymin, xmax, ymax, pad=0):
+def drawpoints(points, xmin=None, ymin=None, xmax=None, ymax=None):
     skips = np.hstack((np.array([0]),points[:,2]))
     xys = np.vstack((np.zeros((1,2)),np.cumsum(points[:,:2],axis=0)))
+    xys[:,:2] -= xys[:,:2].mean(axis=0)
 #     xys = points[:,:2]
 
     xs=[]
@@ -85,23 +86,24 @@ def drawpoints(points, xmin, ymin, xmax, ymax, pad=0):
     y=[]
     for xy,s in zip(xys, skips):
         if s:
-            if x is not None:
+            if len(x) > 1:
                 xs.append(x)
                 ys.append(y)
             x=[]
             y=[]
-        x.append(xy[0])
-        y.append(xy[1])
+        else:
+            x.append(xy[0])
+            y.append(xy[1])
 
     for x,y in zip(xs, ys):
-        if len(x) > 1:
-            pl.plot(x, y, 'k-')
+        pl.plot(x, y, 'k-')
 
-    # xmin,ymin = xys.min(axis=0)
-    # xmax,ymax = xys.max(axis=0)
+    if xmin is None:
+        xmin,ymin = xys.min(axis=0)
+        xmax,ymax = xys.max(axis=0)
     ax = pl.gca()
-    ax.set_xlim(xmin-pad, xmax + pad)
-    ax.set_ylim(ymin-pad, ymax + pad)
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
     ax.invert_yaxis()
     ax.set_xticks([])
     ax.set_yticks([])
@@ -136,20 +138,50 @@ class Sample(SimpleExtension):
         for i in range(batch_size):
             points = outputs[:,i,:]
             xys = np.vstack((np.zeros((1,2)),np.cumsum(points[:,:2],axis=0)))
+            xys[:,:2] -= xys[:,:2].mean(axis=0)
             mins.append(xys.min(axis=0))
             maxs.append(xys.max(axis=0))
         xmin, ymin = np.array(mins).min(axis=0)
         xmax, ymax = np.array(maxs).max(axis=0)
 
+        # find a new grid of subplot which best match the y/x ratio
+        r = (ymax-ymin)/(xmax-xmin)
+        reverse = r > 1.
+        if reverse: r = 1./r
+        bestapprox = 10
+        for f in range(1,self.N):
+            if self.N % f != 0:
+                continue
+            rapprox = 1./float(f*f)
+            if abs(r-rapprox) < abs(r-bestapprox):
+                bestapprox = rapprox
+                bestf = f
+
+        if reverse:
+            h, w = self.N//bestf, self.N*bestf
+            r = 1./r
+            bestapprox = 1./bestapprox
+        else:
+            h, w = self.N*bestf, self.N//bestf
+
+        if bestapprox > r:
+            newydelta = (ymax-ymin)*bestapprox/r
+            ymax += newydelta/2.
+            ymin -= newydelta/2.
+        else:
+            newxdelta = (xmax-xmin)*r/bestapprox
+            xmax += newxdelta/2.
+            xmin -= newxdelta/2.
+
         pl.close('all')
         fig = pl.figure('Sample sketches')
         fig.set_size_inches(30,25)
         for i in range(batch_size):
-            pl.subplot(self.N*2,self.N//2,i+1)
+            pl.subplot(h,w,i+1)
             drawpoints(outputs[:,i,:], xmin, ymin, xmax, ymax)
         fname = os.path.join(self.path,'sketch.png')
         print('Writting to %s'%fname)
-        pl.subplots_adjust(left=0.01,right=0.99,bottom=0.01,top=0.99,
+        pl.subplots_adjust(left=0.005,right=0.995,bottom=0.005,top=0.995,
                            wspace=0.01,hspace=0.01)
         pl.savefig(fname)
 
@@ -162,6 +194,8 @@ class Sample(SimpleExtension):
         pl.xlabel('iteration')
         pl.ylabel('sample')
         pl.title('Pen down for different samples vs. iteration step')
+        if not os.path.exists(self.path):
+            os.mkdir(self.path)
         fname = os.path.join(self.path,'pen.png')
         print('Writting to %s'%fname)
         pl.savefig(fname)
@@ -399,7 +433,7 @@ def main(name, epochs, batch_size, learning_rate,
 
     if sample:
         assert old_model_name and old_model_name != 'continue'
-        Sample(generator, steps=max_length, path='.').do(None)
+        Sample(generator, steps=max_length, path=old_model_name).do(None)
         exit(0)
 
     #------------------------------------------------------------
