@@ -175,7 +175,7 @@ class Sample(SimpleExtension):
 
         pl.close('all')
         fig = pl.figure('Sample sketches')
-        fig.set_size_inches(30,25)
+        fig.set_size_inches(25,25)
         for i in range(batch_size):
             pl.subplot(h,w,i+1)
             drawpoints(outputs[:,i,:], xmin, ymin, xmax, ymax)

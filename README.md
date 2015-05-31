@@ -42,11 +42,12 @@ python sketch.py --dim 900 --depth 1 --bs 56 --lr 1e-5  -G 10 --model handwritin
    Epoch 11, step 84
    test_sequence_log_likelihood: -1607.07531738
 ```
-The result directory can be downloaded [here](https://s3.amazonaws.com/udisketch/handwriting-1X900m20d5r15b56e15G10.tgz)
-and after opening it you can generate samples directly with
+The result directory can be downloaded
+[here](https://s3.amazonaws.com/udisketch/handwriting-1X900m20d5r15b56e15G10.tgz)
+and after opening it you can generate samples directly without training:
 
 ```bash
-python sketch.py --dim 900 --depth 1 --bs 56 --lr 1e-4  -G 10 --model handwriting-1X900m20d5r15b56e15G10 --sample
+python sketch.py --dim 900 --depth 1 --model handwriting-1X900m20d5r15b56e15G10 --sample
 ```
 
  ![samples](sketch.png)
