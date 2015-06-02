@@ -18,7 +18,7 @@ Running code
 
 Run parameteres are used to build a unique name which is used to 
 create a directory where the model is saved and also a sample image
-`samples-sketch.png`
+`sketch.png`
 
 For example:
 
@@ -44,7 +44,7 @@ python sketch.py --dim 900 --depth 1 --bs 56 --lr 1e-5  -G 10 --model handwritin
 ```
 The result directory can be downloaded
 [here](https://s3.amazonaws.com/udisketch/handwriting-1X900m20d5r15b56e15G10.tgz)
-and after opening it you can generate samples directly without training:
+and after opening it you can generate samples with:
 
 ```bash
 python sketch.py --dim 900 --depth 1 --model handwriting-1X900m20d5r15b56e15G10 --sample
