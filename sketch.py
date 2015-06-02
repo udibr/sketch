@@ -49,7 +49,8 @@ from fuel.datasets import H5PYDataset
 from blocks.filter import VariableFilter
 from blocks.bricks.parallel import Fork
 
-from blocks_extras import OrthogonalGlorot, GlorotBengio, LSTMstack
+from blocks_extras import OrthogonalGlorot, LSTMstack
+from recurrent_stack import RecurrentStack
 
 floatX = theano.config.floatX
 fuel.config.floatX = floatX
@@ -372,22 +373,30 @@ def main(name, epochs, batch_size, learning_rate,
         print("starting from model %s"%old_model_name)
 
     #----------------------------------------------------------------------
+    # if depth > 1:
+    #     transition = LSTMstack(dim=dim, depth=depth, name="transition",
+    #                                lstm_name="transition")
+    #     assert not GRU
+    # elif GRU:
+    #     transition = GatedRecurrent(dim=dim, name="transition")
+    # else:
+    #     transition = LSTM(dim=dim, name="transition")
+    transitions = [GatedRecurrent(dim=dim) if GRU else LSTM(dim=dim)
+                   for _ in range(depth)]
     if depth > 1:
-        transition = LSTMstack(dim=dim, depth=depth, name="transition",
-                                   lstm_name="transition")
-        assert not GRU
-    elif GRU:
-        transition = GatedRecurrent(dim=dim, name="transition")
+        transition = RecurrentStack(transitions, name="transition")
+        source_names=['states_%d'%(depth-1)]
     else:
-        transition = LSTM(dim=dim, name="transition")
-
+        transition = transitions[0]
+        transition.name = "transition"
+        source_names=['states']
 
     emitter = SketchEmitter(mix_dim=mix_dim,
                             epsilon=epsilon,
                             name="emitter")
     readout = Readout(
         readout_dim=emitter.get_dim('inputs'),
-        source_names=['states'],
+        source_names=source_names,
         emitter=emitter,
         name="readout")
     normal_inputs = [name for name in transition.apply.sequences
@@ -475,14 +484,16 @@ def main(name, epochs, batch_size, learning_rate,
     (energies,) = VariableFilter(
         applications=[generator.readout.readout],
         name_regex="output")(cg.variables)
-    (activations,) = VariableFilter(
-        applications=[generator.transition.apply],
-        name=generator.transition.apply.states[0])(cg.variables)
     min_energy = named_copy(energies.min(), "min_energy")
     max_energy = named_copy(energies.max(), "max_energy")
-    mean_activation = named_copy(abs(activations).mean(),
-                                 "mean_activation")
-    observables += [min_energy, max_energy, mean_activation]
+    observables += [min_energy, max_energy]
+
+    # (activations,) = VariableFilter(
+    #     applications=[generator.transition.apply],
+    #     name=generator.transition.apply.states[0])(cg.variables)
+    # mean_activation = named_copy(abs(activations).mean(),
+    #                              "mean_activation")
+    # observables.append(mean_activation)
 
     observables += [algorithm.total_step_norm, algorithm.total_gradient_norm]
     for name, param in params.items():
