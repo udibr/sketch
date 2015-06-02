@@ -368,6 +368,8 @@ def main(name, epochs, batch_size, learning_rate,
         print("Sampling")
     else:
         print("\nRunning experiment %s" % jobname)
+    if old_model_name:
+        print("starting from model %s"%old_model_name)
 
     #----------------------------------------------------------------------
     if depth > 1:
