@@ -87,7 +87,15 @@ class RecurrentStack(BaseRecurrent, Initializable):
 
     @recurrent(sequences=[], states=[], outputs=[], contexts=[])
     def apply(self, **kwargs):
-        """
+        """Apply the stack of transitions.
+
+        Parameters
+        ----------
+        All parameters are of type :class:`~tensor.TensorVariable`.
+
+        Returns
+        -------
+        All return values are of type :class:`~tensor.TensorVariable`.
 
         """
         last_states = None

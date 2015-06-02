@@ -49,7 +49,7 @@ from fuel.datasets import H5PYDataset
 from blocks.filter import VariableFilter
 from blocks.bricks.parallel import Fork
 
-from blocks_extras import OrthogonalGlorot, LSTMstack
+from blocks_extras import OrthogonalGlorot
 from recurrent_stack import RecurrentStack
 
 floatX = theano.config.floatX
@@ -373,22 +373,16 @@ def main(name, epochs, batch_size, learning_rate,
         print("starting from model %s"%old_model_name)
 
     #----------------------------------------------------------------------
-    # if depth > 1:
-    #     transition = LSTMstack(dim=dim, depth=depth, name="transition",
-    #                                lstm_name="transition")
-    #     assert not GRU
-    # elif GRU:
-    #     transition = GatedRecurrent(dim=dim, name="transition")
-    # else:
-    #     transition = LSTM(dim=dim, name="transition")
-    transitions = [GatedRecurrent(dim=dim) if GRU else LSTM(dim=dim)
-                   for _ in range(depth)]
     if depth > 1:
+        transitions = [GatedRecurrent(dim=dim) if GRU else LSTM(dim=dim)
+                       for _ in range(depth)]
         transition = RecurrentStack(transitions, name="transition")
         source_names=['states_%d'%(depth-1)]
     else:
-        transition = transitions[0]
-        transition.name = "transition"
+        if GRU:
+            transition = GatedRecurrent(dim=dim, name="transition")
+        else:
+            transition = LSTM(dim=dim, name="transition")
         source_names=['states']
 
     emitter = SketchEmitter(mix_dim=mix_dim,
