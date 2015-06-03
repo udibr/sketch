@@ -32,6 +32,7 @@ class RecurrentStack(BaseRecurrent, Initializable):
     ----------
     transitions : list
         List of recurrent units to use in each layer.
+        Note: A suffix with layer number is added to transitions' names.
     prototype : :class:`.FeedForward`, optional
         The transformation applied to each states of each layer  when it is
          forked to the sequences of the next layer. By
@@ -77,7 +78,8 @@ class RecurrentStack(BaseRecurrent, Initializable):
             # I write it down explicitly.
             prototype = Linear(use_bias=True)
         depth = len(transitions)
-        self.forks = [Fork(self.normal_inputs(d), prototype=prototype)
+        self.forks = [Fork(self.normal_inputs(d), name='fork_' + str(d),
+                           prototype=prototype)
                       for d in range(1, depth)]
 
         self.children = self.transitions + self.forks
@@ -180,10 +182,10 @@ from collections import OrderedDict
 
 class tRecurrentStack(object):
     def setUp(self):
-        depth = 2
+        depth = 4
         self.depth = depth
         self.sync = False
-        dim = 3
+        dim = 3  # don't change, hardwired in the code
         tarnsitions = [LSTM(dim=dim) for _ in range(depth)]
         self.stack = RecurrentStack(tarnsitions,
                                     weights_init=Constant(2),
