@@ -13,7 +13,8 @@ logging.basicConfig(format=FORMAT, datefmt=DATEFMT, level=logging.INFO)
 import sys
 import theano
 # Automatically detect we are debugging and turn on maximal Theano debugging
-if sys.gettrace() is not None:
+debug = sys.gettrace() is not None
+if debug:
     print("Debugging")
     theano.config.optimizer = 'fast_compile'  # or "None"
     theano.config.exception_verbosity = 'high'
@@ -340,7 +341,7 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
 #----------------------------------------------------------------------------
 def main(name, epochs, batch_size, learning_rate,
          dim, mix_dim, old_model_name, max_length, bokeh, GRU, dropout,
-         depth, max_grad, step_method, epsilon, sample):
+         depth, max_grad, step_method, epsilon, sample, distribute):
 
     #----------------------------------------------------------------------
     datasource = name
@@ -364,6 +365,12 @@ def main(name, epochs, batch_size, learning_rate,
         jobname += 'G%g'%max_grad
     if step_method != 'adam':
         jobname += step_method
+    if distribute:
+        jobname += 'D'
+        assert depth > 1
+
+    if debug:
+        jobname += ".debug"
 
     if sample:
         print("Sampling")
@@ -373,16 +380,18 @@ def main(name, epochs, batch_size, learning_rate,
         print("starting from model %s"%old_model_name)
 
     #----------------------------------------------------------------------
+    transitions = [GatedRecurrent(dim=dim) if GRU else LSTM(dim=dim)
+                   for _ in range(depth)]
     if depth > 1:
-        transitions = [GatedRecurrent(dim=dim) if GRU else LSTM(dim=dim)
-                       for _ in range(depth)]
-        transition = RecurrentStack(transitions, name="transition")
-        source_names=['states_%d'%(depth-1)]
-    else:
-        if GRU:
-            transition = GatedRecurrent(dim=dim, name="transition")
+        transition = RecurrentStack(transitions, name="transition",
+                                    fast=True, distribute=distribute)
+        if distribute:
+            source_names=['states_%d'%d for d in range(depth)]
         else:
-            transition = LSTM(dim=dim, name="transition")
+            source_names=['states_%d'%(depth-1)]
+    else:
+        transition = transitions[0]
+        transition.name = "transition"
         source_names=['states']
 
     emitter = SketchEmitter(mix_dim=mix_dim,
@@ -403,9 +412,11 @@ def main(name, epochs, batch_size, learning_rate,
     generator.weights_init = OrthogonalGlorot()
     generator.biases_init = Constant(0)
 
-    # Build the cost computation graph [steps,batch_size, 3]
-    x = T.tensor3('features',dtype=floatX)[:max_length,:,:]
-    x.tag.test_value = np.ones((max_length,batch_size,3)).astype(np.float32)
+    # Build the cost computation graph [steps, batch_size, 3]
+    x = T.tensor3('features', dtype=floatX)
+    if debug:
+        x.tag.test_value = np.ones((max_length,batch_size,3)).astype(floatX)
+    x = x[:max_length,:,:]  # has to be after setting test_value
     cost = generator.cost(x)
     cost.name = "sequence_log_likelihood"
 
@@ -447,8 +458,9 @@ def main(name, epochs, batch_size, learning_rate,
     if dropout > 0.:
         from blocks.roles import INPUT, OUTPUT
         dropout_target = VariableFilter(roles=[OUTPUT],
-                                        bricks=[transition],
+                                        bricks=transitions,
                                         name_regex='states')(cg.variables)
+        print('# dropout %d' % len(dropout_target))
         cg = apply_dropout(cg, dropout_target, dropout)
         cost = cg.outputs[0]
 
@@ -585,9 +597,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int,
                 default=500, help="Number of training epochs to do")
     parser.add_argument("--bs", "--batch-size", type=int, dest="batch_size",
-                default=56, help="Size of each mini-batch."
-                                 " For max-length=600 on GTX 980 use"
-                                 " 85 for LSTM, 178 for GRU")
+                default=56, help="Size of each mini-batch.")
     parser.add_argument("--lr", "--learning-rate", type=float,
                         dest="learning_rate",default=1e-4,
                         help="Learning rate")
@@ -604,8 +614,8 @@ if __name__ == "__main__":
                         help="Set if you want to use Bokeh ")
     parser.add_argument("--GRU", action='store_true', default=False,
                         help="Use GatedRecurrent network instead of LSTM.")
-    parser.add_argument("-d","--dropout",type=float,default=0.5,
-                        help="dropout. Set to 0 for no dropout")
+    parser.add_argument("-d","--dropout",type=float,default=0,
+                        help="dropout. Set to 0 for no dropout. NOT WORKING")
     parser.add_argument("--depth", type=int,
                 default=3, help="Number of recurrent layers to be stacked.")
     parser.add_argument("-G", "--max-grad", type=float,
@@ -619,6 +629,10 @@ if __name__ == "__main__":
                         help="Epsilon value for mixture of gaussians")
     parser.add_argument("--sample", action='store_true', default=False,
                         help="Just generate a sample without traning.")
+    parser.add_argument("--distribute", action='store_true', default=False,
+                        help="To send the input to all layers and not just the"
+                             " first. Also to use the states of all layers as"
+                             " output and not just the last.")
 
     args = parser.parse_args()
 

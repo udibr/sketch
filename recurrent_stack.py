@@ -1,7 +1,26 @@
+# -*- coding: utf-8 -*-
 from blocks.bricks.recurrent import BaseRecurrent, recurrent
 from blocks.bricks import Initializable, Linear
 from blocks.bricks.base import application
-from blocks.bricks.parallel import Fork
+from blocks.bricks.parallel import Fork, Parallel
+from theano.gof import utils
+
+from copy import copy
+
+from blocks.filter import get_application_call
+from blocks.roles import VariableRole, add_role
+
+class InnerInputRole(VariableRole):
+    pass
+
+#: The input of a :class:`.Brick`
+INNER_INPUT = InnerInputRole()
+
+class InnerOutputRole(VariableRole):
+    pass
+
+#: The input of a :class:`.Brick`
+INNER_OUTPUT = InnerOutputRole()
 
 class RecurrentStack(BaseRecurrent, Initializable):
     u"""Stack of recurrent networks.
@@ -9,8 +28,7 @@ class RecurrentStack(BaseRecurrent, Initializable):
     Build a stack of recurrent layers from a supplied list of
     BaseRecurrent objects. Each object must have a `sequences`,
     `contexts`, `states` and `outputs` parameters to its `apply` method.
-    It is assumed that the `sequences` of all objects has an "inputs"
-    element. It is assumed that all `states` have a "states" element
+    It is assumed that all `states` have a "states" element
     (this can be configured with `states_name` parameter.)
 
     The `sequences` (the "inputs") of the the first layer (layer 0) is
@@ -46,25 +64,22 @@ class RecurrentStack(BaseRecurrent, Initializable):
         (layer) that is used, via fork, as the sequences (input) of the
         next layer. The same element should also appear in the states
         parameter of the apply method.
-    sync : bool
-        If true, the input of each layer is forked from the states of the
-        lower layer from the previous step of the RNN time sequence.
-        If false (async, default) the input is forked from the states
-        output of the same step.
-        Looking at other examples, e.g., it looks like async is the
-        correct way.
-       https://github.com/karpathy/char-rnn/blob/master/model/LSTM.lua#L25
+    fast : bool
+        Use the fast, but also memory consuming, implementation of this code.
+        By default true. WARNING: there is something strange in the behaviour
+        of the slow implementation (see last test below.) Only output used
+        outside this class can be found using the output name. This problem
+        does not appear in fast mode.
 
     Notes
     -----
     See :class:`.BaseRecurrent` for more initialization parameters.
 
     """
-    def __init__(self, transitions, prototype=None, sync=False,
-                 states_name="states", **kwargs):
+    def __init__(self, transitions, prototype=None, states_name="states",
+                 fast=True, distribute=False, **kwargs):
         super(RecurrentStack, self).__init__(**kwargs)
 
-        self.sync = sync
         self.states_name = states_name
 
         for d, transition in enumerate(transitions):
@@ -82,9 +97,21 @@ class RecurrentStack(BaseRecurrent, Initializable):
                            prototype=prototype)
                       for d in range(1, depth)]
 
-        self.children = self.transitions + self.forks
+        self.distributes = []
+        if distribute:
+            input_names = self.normal_inputs(0)
+            input_dims = self.transitions[0].get_dims(input_names)
+            for d in range(1, depth):
+                assert cmp(self.normal_inputs(d), input_names) == 0
+                self.distributes.append(Parallel(
+                    input_names, input_dims,
+                    self.transitions[d].get_dims(input_names),
+                child_prefix='distribute_' + str(d)))
 
-        # Programmatically fix the parameters of the  recurrent decoration
+        self.children = self.transitions + self.forks + self.distributes
+
+        # Programmatically set the apply method
+        self.apply = self.fast_apply if fast else self.low_memory_apply
         setattr(self.apply, 'sequences', transitions[0].apply.sequences)
         for t in ["states", "contexts", "outputs"]:
             v = [s + '_' + str(d)
@@ -111,32 +138,55 @@ class RecurrentStack(BaseRecurrent, Initializable):
             fork.input_dim = self.transitions[d].get_dim(self.states_name)
             fork.output_dims = self.transitions[d+1].get_dims(
                 fork.output_names)
+        for d, distribute in enumerate(self.distributes):
+            distribute.input_dims = self.transitions[0].get_dims(self.normal_inputs(0))
+            distribute.output_dims = self.transitions[d+1].get_dims(
+                self.normal_inputs(d+1))
 
-    @recurrent(sequences=[], states=[], outputs=[], contexts=[])
-    def apply(self, **kwargs):
+    def do_apply(self, *args, **kwargs):
         """Apply the stack of transitions.
+
+        This is the undecorated implementation of the apply method.
+        It is separated from the decorated apply method in order to allow
+        usage of different docrations (wrappers) to be used.
+
 
         Parameters
         ----------
-        All parameters are of type :class:`~tensor.TensorVariable`.
+        iterate : bool
+            If ``True`` iteration is made. By default ``True``.
+        reverse : bool
+            If ``True``, the sequences are processed in backward
+            direction. ``False`` by default.
+        return_initial_states : bool
+            If ``True``, initial states are included in the returned
+            state tensors. ``False`` by default.
+        The names appearing in the sequences, states, contexts parameters of
+            the apply method of each of the transitions in self.transitions.
+            Each such name is suffixed with a layer number.
 
         Returns
         -------
+        The outputs of all transitions.
         All return values are of type :class:`~tensor.TensorVariable`.
 
         """
         results = []
+        last_states = None
+        layer0_kwargs = None
         for d, transition in enumerate(self.transitions):
             sequences_names = transition.apply.sequences
             if d == 0:
-                layer_kwargs = dict(
+                layer0_kwargs = dict(
                     (s, kwargs.get(s)) for s in sequences_names)
+                layer_kwargs = layer0_kwargs
             else:
-                if self.sync:
-                    last_states = kwargs[self.states_name + "_" + str(d-1)]
-                layer_kwargs = dict(zip(
-                    self.normal_inputs(d),
-                    self.forks[d-1].apply(last_states, as_list=True)))
+                inputs = self.forks[d-1].apply(last_states, as_list=True)
+                if self.distributes:
+                    distributes = self.distributes[d-1].apply(as_list=True, **layer0_kwargs)
+                    for i in range(len(inputs)):
+                        inputs[i] += distributes[i]
+                layer_kwargs = dict(zip(self.normal_inputs(d), inputs))
                 if "mask" in sequences_names:
                     layer_kwargs["mask"] = kwargs.get("mask")
 
@@ -145,13 +195,37 @@ class RecurrentStack(BaseRecurrent, Initializable):
                 for s in getattr(transition.apply, t):
                     layer_kwargs[s] = kwargs.get(s + suffix)
 
-            result = transition.apply(iterate=False, **layer_kwargs)
+            for k in ['iterate', 'reverse', 'return_initial_states']:
+                if k in kwargs:
+                    layer_kwargs[k] = kwargs[k]
+            result = transition.apply(as_list=True, **layer_kwargs)
+
+            # inner_inputs = get_application_call(result[0]).inner_inputs
+            # for input_ in inner_inputs:
+            #     add_role(input_, INNER_INPUT)
+            #
+            # inner_outputs = get_application_call(result[0]).inner_outputs
+            # for output_ in inner_outputs:
+            #     add_role(output_, INNER_OUTPUT)
+            #
             results.extend(result)
-            if not self.sync:
-                i = transition.apply.outputs.index(self.states_name)
-                last_states = result[i]
+
+            state_index = transition.apply.outputs.index(self.states_name)
+            last_states = result[state_index]
+            if kwargs.get('return_initial_states', False):
+                # Note that the following line reset the tag
+                last_states = last_states[1:]
 
         return tuple(results)
+
+    @recurrent
+    def low_memory_apply(self, *args, **kwargs):
+        kwargs['iterate'] = False
+        return self.do_apply(*args, **kwargs)
+
+    @application
+    def fast_apply(self, *args, **kwargs):
+        return self.do_apply(*args, **kwargs)
 
     def get_dim(self, name):
         if name in self.transitions[0].apply.sequences:
@@ -184,10 +258,9 @@ class tRecurrentStack(object):
     def setUp(self):
         depth = 4
         self.depth = depth
-        self.sync = False
         dim = 3  # don't change, hardwired in the code
-        tarnsitions = [LSTM(dim=dim) for _ in range(depth)]
-        self.stack = RecurrentStack(tarnsitions,
+        transitions = [LSTM(dim=dim) for _ in range(depth)]
+        self.stack = RecurrentStack(transitions,fast=False,
                                     weights_init=Constant(2),
                                     biases_init=Constant(0))
         self.stack.initialize()
@@ -201,6 +274,7 @@ class tRecurrentStack(object):
             kwargs['states_' + str(d)] = tensor.matrix('states_' + str(d))
             kwargs['cells_' + str(d)] = tensor.matrix('cells_' + str(d))
         results = self.stack.apply(iterate=False, **kwargs)
+
         next_h = theano.function(inputs=list(kwargs.values()),
                                  outputs=results)
 
@@ -231,9 +305,6 @@ class tRecurrentStack(object):
 
             # omitting biases because they are zero
             activation = numpy.dot(h0_v, W_state_val) + x_v
-            if self.sync:
-                # current layer input state transformed to input of next
-                x_v = numpy.dot(h0_v, W_state2x_val)
 
             i_t = sigmoid(activation[:, :3] + c0_v * W_cell_to_in)
             f_t = sigmoid(activation[:, 3:6] + c0_v * W_cell_to_forget)
@@ -241,9 +312,8 @@ class tRecurrentStack(object):
             o_t = sigmoid(activation[:, 9:12] +
                           next_cells * W_cell_to_out)
             h1_v = o_t * numpy.tanh(next_cells)
-            if not self.sync:
-                # current layer output state transformed to input of next
-                x_v = numpy.dot(h1_v, W_state2x_val)
+            # current layer output state transformed to input of next
+            x_v = numpy.dot(h1_v, W_state2x_val)
 
             h1_val.append(h1_v)
 
@@ -293,9 +363,6 @@ class tRecurrentStack(object):
                 h_v = h_val[d][i-1, :, :]
                 c_v = c_val[d][i-1, :, :]
                 activation = numpy.dot(h_v, W_state_val) + x_v
-                if self.sync:
-                    # current layer input state transformed to input of next
-                    x_v = numpy.dot(h_v, W_state2x_val)
                 i_t = sigmoid(activation[:, :3] + c_v * W_cell_to_in)
                 f_t = sigmoid(activation[:, 3:6] + c_v * W_cell_to_forget)
                 c_v1 = f_t * c_v + i_t * numpy.tanh(activation[:, 6:9])
@@ -306,9 +373,8 @@ class tRecurrentStack(object):
                        (1 - mask_val[i - 1, :, None]) * h_v)
                 c_v = (mask_val[i - 1, :, None] * c_v1 +
                        (1 - mask_val[i - 1, :, None]) * c_v)
-                if not self.sync:
-                    # current layer output state transformed to input of next
-                    x_v = numpy.dot(h_v, W_state2x_val)
+                # current layer output state transformed to input of next
+                x_v = numpy.dot(h_v, W_state2x_val)
 
                 h_vs.append(h_v)
                 c_vs.append(c_v)
@@ -322,8 +388,65 @@ class tRecurrentStack(object):
             assert_allclose(h_val[d][1:], res[d*2], rtol=1e-4)
             assert_allclose(c_val[d][1:], res[d*2+1], rtol=1e-4)
 
+
+from blocks.bricks.base import application
+from blocks.bricks.sequence_generators import (
+    SequenceGenerator, Readout, TrivialEmitter)
+from blocks.filter import VariableFilter
+from blocks.graph import ComputationGraph
+from blocks.initialization import IsotropicGaussian, Constant
+from numpy.testing import assert_equal
+
+class TestEmitter(TrivialEmitter):
+    @application
+    def cost(self, readouts, outputs):
+        """Compute MSE."""
+        return ((readouts - outputs) ** 2).sum(axis=readouts.ndim - 1)
+
+
+def test_recurrentstack_sequence_generator():
+    """Test RecurrentStack behaviour inside a SequenceGenerator.
+
+    """
+    floatX = theano.config.floatX
+    rng = numpy.random.RandomState(1234)
+
+    output_dim = 1
+    dim = 20
+    batch_size = 30
+    n_steps = 10
+
+    depth=2
+    transitions = [LSTM(dim=dim) for _ in range(depth)]
+    transition = RecurrentStack(transitions,fast=True,
+                                weights_init=Constant(2),
+                                biases_init=Constant(0))
+    generator = SequenceGenerator(
+        Readout(readout_dim=output_dim, source_names=["states_%d"%(depth-1)],
+                emitter=TestEmitter()),
+        transition,
+        weights_init=IsotropicGaussian(0.1), biases_init=Constant(0.0),
+        seed=1234)
+    generator.initialize()
+
+    y = tensor.tensor3('y')
+
+    cost = generator.cost(y)
+
+    # Check that all states can be accessed and not just the state connected
+    # to readout.
+    cg = ComputationGraph(cost)
+    from blocks.roles import INPUT, OUTPUT
+    dropout_target = VariableFilter(roles=[INNER_OUTPUT],
+                                    # bricks=transitions,
+                                    # name_regex='*'
+                                    )(cg.variables)
+    assert_equal(len(dropout_target), depth)
+
+
 if __name__ == "__main__":
-    test = tRecurrentStack()
-    test.setUp()
-    test.test_one_step()
-    test.test_many_steps()
+    # test = tRecurrentStack()
+    # test.setUp()
+    # test.test_one_step()
+    # test.test_many_steps()
+    test_recurrentstack_sequence_generator()
