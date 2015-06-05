@@ -10,17 +10,6 @@ from copy import copy
 from blocks.filter import get_application_call
 from blocks.roles import VariableRole, add_role
 
-class InnerInputRole(VariableRole):
-    pass
-
-#: The input of a :class:`.Brick`
-INNER_INPUT = InnerInputRole()
-
-class InnerOutputRole(VariableRole):
-    pass
-
-#: The input of a :class:`.Brick`
-INNER_OUTPUT = InnerOutputRole()
 
 class RecurrentStack(BaseRecurrent, Initializable):
     u"""Stack of recurrent networks.
@@ -70,6 +59,14 @@ class RecurrentStack(BaseRecurrent, Initializable):
         of the slow implementation (see last test below.) Only output used
         outside this class can be found using the output name. This problem
         does not appear in fast mode.
+    distribute : bool
+        By default False. When true, the input (sequences) is spread to all
+        layer and not just the bottom layer. Each vector in the sequences to
+        the first layer is passed through a linear transformation, without bias,
+        to each of the sequences of the other layers and is added to the
+        usually input comfing from a fork from the states of the previous layer.
+        For this to work it is assumed that all layers have the same names in
+        their sequences.
 
     Notes
     -----
@@ -106,7 +103,7 @@ class RecurrentStack(BaseRecurrent, Initializable):
                 self.distributes.append(Parallel(
                     input_names, input_dims,
                     self.transitions[d].get_dims(input_names),
-                child_prefix='distribute_' + str(d)))
+                    child_prefix = 'distribute_' + str(d)))
 
         self.children = self.transitions + self.forks + self.distributes
 
@@ -139,7 +136,8 @@ class RecurrentStack(BaseRecurrent, Initializable):
             fork.output_dims = self.transitions[d+1].get_dims(
                 fork.output_names)
         for d, distribute in enumerate(self.distributes):
-            distribute.input_dims = self.transitions[0].get_dims(self.normal_inputs(0))
+            distribute.input_dims = self.transitions[0].get_dims(
+                self.normal_inputs(0))
             distribute.output_dims = self.transitions[d+1].get_dims(
                 self.normal_inputs(d+1))
 
@@ -179,11 +177,12 @@ class RecurrentStack(BaseRecurrent, Initializable):
             if d == 0:
                 layer0_kwargs = dict(
                     (s, kwargs.get(s)) for s in sequences_names)
-                layer_kwargs = layer0_kwargs
+                layer_kwargs = dict(layer0_kwargs)
             else:
                 inputs = self.forks[d-1].apply(last_states, as_list=True)
                 if self.distributes:
-                    distributes = self.distributes[d-1].apply(as_list=True, **layer0_kwargs)
+                    distributes = self.distributes[d-1].apply(as_list=True,
+                                                              **layer0_kwargs)
                     for i in range(len(inputs)):
                         inputs[i] += distributes[i]
                 layer_kwargs = dict(zip(self.normal_inputs(d), inputs))
@@ -200,14 +199,6 @@ class RecurrentStack(BaseRecurrent, Initializable):
                     layer_kwargs[k] = kwargs[k]
             result = transition.apply(as_list=True, **layer_kwargs)
 
-            # inner_inputs = get_application_call(result[0]).inner_inputs
-            # for input_ in inner_inputs:
-            #     add_role(input_, INNER_INPUT)
-            #
-            # inner_outputs = get_application_call(result[0]).inner_outputs
-            # for output_ in inner_outputs:
-            #     add_role(output_, INNER_OUTPUT)
-            #
             results.extend(result)
 
             state_index = transition.apply.outputs.index(self.states_name)
@@ -259,13 +250,31 @@ class tRecurrentStack(object):
         depth = 4
         self.depth = depth
         dim = 3  # don't change, hardwired in the code
-        transitions = [LSTM(dim=dim) for _ in range(depth)]
-        self.stack = RecurrentStack(transitions,fast=False,
-                                    weights_init=Constant(2),
-                                    biases_init=Constant(0))
-        self.stack.initialize()
+        tarnsitions = [LSTM(dim=dim) for _ in range(depth)]
+        self.stack0 = RecurrentStack(tarnsitions,
+                                     weights_init=Constant(2),
+                                     biases_init=Constant(0))
+        self.stack0.initialize()
+        self.stack1 = RecurrentStack(tarnsitions,
+                                     weights_init=Constant(2),
+                                     biases_init=Constant(0),
+                                     fast=False)
+        self.stack1.initialize()
 
-    def test_one_step(self):
+        self.stack2 = RecurrentStack(tarnsitions,
+                                     weights_init=Constant(2),
+                                     biases_init=Constant(0),
+                                     distribute=True)
+        self.stack2.initialize()
+
+        self.stack3 = RecurrentStack(tarnsitions,
+                                     weights_init=Constant(2),
+                                     biases_init=Constant(0),
+                                     distribute=True,
+                                     fast=False)
+        self.stack3.initialize()
+
+    def do_one_step(self, stack, distribute=False):
         depth = self.depth
         kwargs = OrderedDict()
         kwargs['inputs'] = tensor.matrix('inputs')
@@ -273,8 +282,7 @@ class tRecurrentStack(object):
         for d in range(depth):
             kwargs['states_' + str(d)] = tensor.matrix('states_' + str(d))
             kwargs['cells_' + str(d)] = tensor.matrix('cells_' + str(d))
-        results = self.stack.apply(iterate=False, **kwargs)
-
+        results = stack.apply(iterate=False, **kwargs)
         next_h = theano.function(inputs=list(kwargs.values()),
                                  outputs=results)
 
@@ -291,6 +299,7 @@ class tRecurrentStack(object):
         W_cell_to_in = 2 * numpy.ones((3,), dtype=theano.config.floatX)
         W_cell_to_out = 2 * numpy.ones((3,), dtype=theano.config.floatX)
         W_cell_to_forget = 2 * numpy.ones((3,), dtype=theano.config.floatX)
+        W_input2input = 2 * numpy.ones((12, 12), dtype=theano.config.floatX)
 
         def sigmoid(x):
             return 1. / (1. + numpy.exp(-x))
@@ -305,6 +314,8 @@ class tRecurrentStack(object):
 
             # omitting biases because they are zero
             activation = numpy.dot(h0_v, W_state_val) + x_v
+            if distribute and d > 0:
+                activation += numpy.dot(x_val, W_input2input)
 
             i_t = sigmoid(activation[:, :3] + c0_v * W_cell_to_in)
             f_t = sigmoid(activation[:, 3:6] + c0_v * W_cell_to_forget)
@@ -321,13 +332,19 @@ class tRecurrentStack(object):
         for d in range(depth):
             assert_allclose(h1_val[d], res[d*2], rtol=1e-6)
 
-    def test_many_steps(self):
+    def test_one_step(self):
+        self.do_one_step(self.stack0)
+        self.do_one_step(self.stack1)
+        self.do_one_step(self.stack2, distribute=True)
+        self.do_one_step(self.stack3, distribute=True)
+
+    def do_many_steps(self, stack, distribute=False):
         depth = self.depth
 
         kwargs = OrderedDict()
         kwargs['inputs'] = tensor.tensor3('inputs')
         kwargs['mask'] = tensor.matrix('mask')
-        results = self.stack.apply(iterate=True, **kwargs)
+        results = stack.apply(iterate=True, **kwargs)
         calc_h = theano.function(inputs=list(kwargs.values()),
                                  outputs=results)
 
@@ -351,6 +368,7 @@ class tRecurrentStack(object):
         W_cell_to_in = 2 * numpy.ones((3,), dtype=theano.config.floatX)
         W_cell_to_out = 2 * numpy.ones((3,), dtype=theano.config.floatX)
         W_cell_to_forget = 2 * numpy.ones((3,), dtype=theano.config.floatX)
+        W_input2input = 2 * numpy.ones((12, 12), dtype=theano.config.floatX)
 
         def sigmoid(x):
             return 1. / (1. + numpy.exp(-x))
@@ -363,6 +381,9 @@ class tRecurrentStack(object):
                 h_v = h_val[d][i-1, :, :]
                 c_v = c_val[d][i-1, :, :]
                 activation = numpy.dot(h_v, W_state_val) + x_v
+                if distribute and d > 0:
+                    activation += numpy.dot(x_val[i-1], W_input2input)
+
                 i_t = sigmoid(activation[:, :3] + c_v * W_cell_to_in)
                 f_t = sigmoid(activation[:, 3:6] + c_v * W_cell_to_forget)
                 c_v1 = f_t * c_v + i_t * numpy.tanh(activation[:, 6:9])
@@ -387,6 +408,12 @@ class tRecurrentStack(object):
         for d in range(depth):
             assert_allclose(h_val[d][1:], res[d*2], rtol=1e-4)
             assert_allclose(c_val[d][1:], res[d*2+1], rtol=1e-4)
+
+    def test_many_steps(self):
+        self.do_many_steps(self.stack0)
+        self.do_many_steps(self.stack1)
+        self.do_many_steps(self.stack2, distribute=True)
+        self.do_many_steps(self.stack3, distribute=True)
 
 
 from blocks.bricks.base import application
@@ -445,8 +472,8 @@ def test_recurrentstack_sequence_generator():
 
 
 if __name__ == "__main__":
-    # test = tRecurrentStack()
-    # test.setUp()
-    # test.test_one_step()
-    # test.test_many_steps()
-    test_recurrentstack_sequence_generator()
+    test = tRecurrentStack()
+    test.setUp()
+    test.test_one_step()
+    test.test_many_steps()
+    # test_recurrentstack_sequence_generator()
