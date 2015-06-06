@@ -341,7 +341,7 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
 #----------------------------------------------------------------------------
 def main(name, epochs, batch_size, learning_rate,
          dim, mix_dim, old_model_name, max_length, bokeh, GRU, dropout,
-         depth, max_grad, step_method, epsilon, sample, distribute):
+         depth, max_grad, step_method, epsilon, sample, skip):
 
     #----------------------------------------------------------------------
     datasource = name
@@ -365,7 +365,7 @@ def main(name, epochs, batch_size, learning_rate,
         jobname += 'G%g'%max_grad
     if step_method != 'adam':
         jobname += step_method
-    if distribute:
+    if skip:
         jobname += 'D'
         assert depth > 1
 
@@ -384,8 +384,8 @@ def main(name, epochs, batch_size, learning_rate,
                    for _ in range(depth)]
     if depth > 1:
         transition = RecurrentStack(transitions, name="transition",
-                                    fast=True, distribute=distribute)
-        if distribute:
+                                    fast=True, skip_connections=skip)
+        if skip:
             source_names=['states_%d'%d for d in range(depth)]
         else:
             source_names=['states_%d'%(depth-1)]
@@ -462,7 +462,9 @@ def main(name, epochs, batch_size, learning_rate,
                                         name_regex='states')(cg.variables)
         print('# dropout %d' % len(dropout_target))
         cg = apply_dropout(cg, dropout_target, dropout)
-        cost = cg.outputs[0]
+        opt_cost = cg.outputs[0]
+    else:
+        opt_cost = cost
 
     if step_method == 'adam':
         step_rule = Adam(learning_rate)
@@ -480,7 +482,7 @@ def main(name, epochs, batch_size, learning_rate,
     step_rule = CompositeRule([StepClipping(max_grad), step_rule])
 
     algorithm = GradientDescent(
-        cost=cost, params=cg.parameters,
+        cost=opt_cost, params=cg.parameters,
         step_rule=step_rule)
 
     #------------------------------------------------------------
@@ -547,7 +549,7 @@ def main(name, epochs, batch_size, learning_rate,
                        observables, prefix="train",
                        every_n_batches=10),
                    DataStreamMonitoring(
-                       [cost],
+                       [cost],  # without dropout
                        test_stream,
                        prefix="test",
                        on_resumption=True,
@@ -615,7 +617,7 @@ if __name__ == "__main__":
     parser.add_argument("--GRU", action='store_true', default=False,
                         help="Use GatedRecurrent network instead of LSTM.")
     parser.add_argument("-d","--dropout",type=float,default=0,
-                        help="dropout. Set to 0 for no dropout. NOT WORKING")
+                        help="dropout. Set to 0 for no dropout.")
     parser.add_argument("--depth", type=int,
                 default=3, help="Number of recurrent layers to be stacked.")
     parser.add_argument("-G", "--max-grad", type=float,
@@ -629,7 +631,7 @@ if __name__ == "__main__":
                         help="Epsilon value for mixture of gaussians")
     parser.add_argument("--sample", action='store_true', default=False,
                         help="Just generate a sample without traning.")
-    parser.add_argument("--distribute", action='store_true', default=False,
+    parser.add_argument("--skip", action='store_true', default=False,
                         help="To send the input to all layers and not just the"
                              " first. Also to use the states of all layers as"
                              " output and not just the last.")
