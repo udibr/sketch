@@ -11,6 +11,7 @@ Dependencies
 * [Blocks](https://github.com/bartvm/blocks) follow
   the [install instructions](http://blocks.readthedocs.org/en/latest/setup.html).
   This will install all the other dependencies for you (Theano, Fuel, etc.).
+  See [this note if using python 3.4](https://github.com/Theano/Theano/issues/2317)
 * Download handwriting dataset using [this notebook](./handwriting-to-hdf5.ipynb)
  
 Running code

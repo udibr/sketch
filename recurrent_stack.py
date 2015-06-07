@@ -91,7 +91,8 @@ class RecurrentStack(BaseRecurrent, Initializable):
             # I write it down explicitly.
             fork_prototype = Linear(use_bias=True)
         depth = len(transitions)
-        self.forks = [Fork(self.normal_inputs(level), name='fork_' + str(level),
+        self.forks = [Fork(self.normal_inputs(level),
+                           name='fork_' + str(level),
                            prototype=fork_prototype)
                       for level in range(1, depth)]
 
@@ -125,8 +126,8 @@ class RecurrentStack(BaseRecurrent, Initializable):
                                 self.apply.states + self.apply.contexts)
 
     def normal_inputs(self, level):
-        return filter(lambda name: name != 'mask',
-                      self.transitions[level].apply.sequences)
+        return [name for name in self.transitions[level].apply.sequences
+                if name != 'mask']
 
     def _push_allocation_config(self):
         # Configure the forks that connect the "states" element in the `states`
@@ -180,6 +181,9 @@ class RecurrentStack(BaseRecurrent, Initializable):
         results = []
         last_states = None
         # The sequneces for the first layer
+        nargs = len(args)
+        assert nargs <= len(self.apply.sequences)
+        kwargs.update(zip(self.apply.sequences[:nargs], args))
         sequences_0 = dict((name, kwargs.get(name))
                            for name in self.normal_inputs(0))
         for level, transition in enumerate(self.transitions):
