@@ -37,7 +37,6 @@ from blocks.initialization import Constant
 from blocks.graph import ComputationGraph, apply_dropout
 from blocks.extensions import FinishAfter, Timing, Printing, ProgressBar
 from blocks.extensions.saveload import SimpleExtension
-from blocks.extensions.saveload import Dump, LoadFromDump
 from blocks.bricks import Random, Initializable, Linear
 from blocks.bricks.base import application
 from blocks.extensions.monitoring import DataStreamMonitoring
@@ -50,6 +49,7 @@ from fuel.datasets import H5PYDataset
 from blocks.filter import VariableFilter
 from blocks.bricks.parallel import Fork
 
+from blocks_extras import Dump, LoadFromDump
 from blocks_extras import OrthogonalGlorot
 from recurrent_stack import RecurrentStack
 
