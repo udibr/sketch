@@ -58,7 +58,6 @@ fuel.config.floatX = floatX
 from fuel.transformers import Mapping
 from blocks.utils import named_copy
 logger = logging.getLogger(__name__)
-from blocks.extensions.plot import Plot
 import pprint
 
 #-----------------------------------------------------------------------------
@@ -575,6 +574,7 @@ def main(name, epochs, batch_size, learning_rate,
                    ]
 
     if bokeh:
+        from blocks.extensions.plot import Plot
         extensions.append(Plot(
             'sketch',
             channels=[
