@@ -80,8 +80,8 @@ class RecurrentStack(BaseRecurrent, Initializable):
 
         self.states_name = states_name
 
-        for d, transition in enumerate(transitions):
-            transition.name += '_' + str(d)
+        for level, transition in enumerate(transitions):
+            transition.name += '_' + str(level)
         self.transitions = transitions
 
         if fork_prototype is None:
@@ -91,43 +91,42 @@ class RecurrentStack(BaseRecurrent, Initializable):
             # I write it down explicitly.
             fork_prototype = Linear(use_bias=True)
         depth = len(transitions)
-        self.forks = [Fork(self.normal_inputs(d), name='fork_' + str(d),
+        self.forks = [Fork(self.normal_inputs(level), name='fork_' + str(level),
                            prototype=fork_prototype)
-                      for d in range(1, depth)]
+                      for level in range(1, depth)]
 
         self.skip_connections = []
         if skip_connections:
             input_names = self.normal_inputs(0)
             input_dims = self.transitions[0].get_dims(input_names)
-            for d in range(1, depth):
-                for name_d, name_0 in zip(self.normal_inputs(d), input_names):
+            for level in range(1, depth):
+                for name_d, name_0 in zip(self.normal_inputs(level),
+                                          input_names):
                     assert name_d == name_0
                 self.skip_connections.append(Parallel(
                     input_names, input_dims,
-                    self.transitions[d].get_dims(input_names),
-                    child_prefix='skip_' + str(d)))
+                    self.transitions[level].get_dims(input_names),
+                    child_prefix='skip_' + str(level)))
 
         self.children = self.transitions + self.forks + self.skip_connections
 
         # Programmatically set the apply method
         self.apply = self.fast_apply if fast else self.low_memory_apply
-        setattr(self.apply, 'sequences', transitions[0].apply.sequences)
-        for t in ["states", "contexts", "outputs"]:
-            v = [s + '_' + str(d)
-                 for d, transition in enumerate(transitions)
-                 for s in getattr(transition.apply, t)]
-            setattr(self.apply, t, v)
+        self.apply.sequences = transitions[0].apply.sequences
+        for property_ in ["states", "contexts", "outputs"]:
+            v = [name + '_' + str(level)
+                 for level, transition in enumerate(transitions)
+                 for name in getattr(transition.apply, property_)]
+            setattr(self.apply, property_, v)
 
         # sum up all the arguments we exepct to see in a call to a transition
         # apply method, anything else is a recursion control
-        self.special_args = set(sum(map(lambda t: getattr(self.apply, t),
-                                        ["sequences", "states", "contexts"]),
-                                    ["mask"]))
+        self.special_args = set(self.apply.sequences + ["mask"] +
+                                self.apply.states + self.apply.contexts)
 
-    def normal_inputs(self, d):
-        transition = self.transitions[d]
-        return [name for name in transition.apply.sequences
-                if 'mask' not in name]
+    def normal_inputs(self, level):
+        return filter(lambda name: name != 'mask',
+                      self.transitions[level].apply.sequences)
 
     def _push_allocation_config(self):
         # Configure the forks that connect the "states" element in the `states`
@@ -139,15 +138,15 @@ class RecurrentStack(BaseRecurrent, Initializable):
         for transition in self.transitions:
             transition.push_allocation_config()
 
-        for d, fork in enumerate(self.forks):
-            fork.input_dim = self.transitions[d].get_dim(self.states_name)
-            fork.output_dims = self.transitions[d+1].get_dims(
+        for level, fork in enumerate(self.forks):
+            fork.input_dim = self.transitions[level].get_dim(self.states_name)
+            fork.output_dims = self.transitions[level+1].get_dims(
                 fork.output_names)
-        for d, skip in enumerate(self.skip_connections):
+        for level, skip in enumerate(self.skip_connections):
             skip.input_dims = self.transitions[0].get_dims(
                 self.normal_inputs(0))
-            skip.output_dims = self.transitions[d+1].get_dims(
-                self.normal_inputs(d+1))
+            skip.output_dims = self.transitions[level+1].get_dims(
+                self.normal_inputs(level+1))
 
     def do_apply(self, *args, **kwargs):
         """Apply the stack of transitions.
@@ -180,30 +179,30 @@ class RecurrentStack(BaseRecurrent, Initializable):
         """
         results = []
         last_states = None
-        layer0_kwargs = None
-        for d, transition in enumerate(self.transitions):
+        # The sequneces for the first layer
+        sequences_0 = dict((name, kwargs.get(name))
+                           for name in self.normal_inputs(0))
+        for level, transition in enumerate(self.transitions):
             # handle all arguments that are part of the sequences
-            sequences_names = transition.apply.sequences
-            if d == 0:
-                layer0_kwargs = dict(
-                    (s, kwargs.get(s)) for s in sequences_names)
-                layer_kwargs = dict(layer0_kwargs)
+            if level == 0:
+                layer_kwargs = dict(sequences_0)
             else:
-                inputs = self.forks[d-1].apply(last_states, as_list=True)
+                inputs = self.forks[level-1].apply(last_states, as_list=True)
                 if self.skip_connections:
-                    skip = self.skip_connections[d-1].apply(as_list=True,
-                                                            **layer0_kwargs)
+                    skip = self.skip_connections[level-1].apply(as_list=True,
+                                                                **sequences_0)
                     for i in range(len(inputs)):
                         inputs[i] += skip[i]
-                layer_kwargs = dict(zip(self.normal_inputs(d), inputs))
-                if "mask" in sequences_names:
-                    layer_kwargs["mask"] = kwargs.get("mask")
+                layer_kwargs = dict(zip(self.normal_inputs(level), inputs))
+            # all layers share same mask
+            if "mask" in transition.apply.sequences:
+                layer_kwargs["mask"] = kwargs.get("mask")
 
             # handle all arguments that should be made unique to each layer
-            for t in ["states", "contexts", "outputs"]:
-                suffix = '_' + str(d)
-                for s in getattr(transition.apply, t):
-                    layer_kwargs[s] = kwargs.get(s + suffix)
+            for property_ in ["states", "contexts", "outputs"]:
+                suffix = '_' + str(level)
+                for name in getattr(transition.apply, property_):
+                    layer_kwargs[name] = kwargs.get(name + suffix)
 
             # Handle all other arguments
             # For example, if this method is called directly (from fast_apply)
@@ -214,7 +213,6 @@ class RecurrentStack(BaseRecurrent, Initializable):
                 layer_kwargs[k] = kwargs[k]
 
             result = transition.apply(as_list=True, **layer_kwargs)
-
             results.extend(result)
 
             state_index = transition.apply.outputs.index(self.states_name)
@@ -431,65 +429,8 @@ class tRecurrentStack(object):
         self.do_many_steps(self.stack2, skip_connections=True)
         self.do_many_steps(self.stack3, skip_connections=True)
 
-
-from blocks.bricks.base import application
-from blocks.bricks.sequence_generators import (
-    SequenceGenerator, Readout, TrivialEmitter)
-from blocks.filter import VariableFilter
-from blocks.graph import ComputationGraph
-from blocks.initialization import IsotropicGaussian, Constant
-from numpy.testing import assert_equal
-
-class TestEmitter(TrivialEmitter):
-    @application
-    def cost(self, readouts, outputs):
-        """Compute MSE."""
-        return ((readouts - outputs) ** 2).sum(axis=readouts.ndim - 1)
-
-
-def test_recurrentstack_sequence_generator():
-    """Test RecurrentStack behaviour inside a SequenceGenerator.
-
-    """
-    floatX = theano.config.floatX
-    rng = numpy.random.RandomState(1234)
-
-    output_dim = 1
-    dim = 20
-    batch_size = 30
-    n_steps = 10
-
-    depth=2
-    transitions = [LSTM(dim=dim) for _ in range(depth)]
-    transition = RecurrentStack(transitions,fast=True,
-                                weights_init=Constant(2),
-                                biases_init=Constant(0))
-    generator = SequenceGenerator(
-        Readout(readout_dim=output_dim, source_names=["states_%d"%(depth-1)],
-                emitter=TestEmitter()),
-        transition,
-        weights_init=IsotropicGaussian(0.1), biases_init=Constant(0.0),
-        seed=1234)
-    generator.initialize()
-
-    y = tensor.tensor3('y')
-
-    cost = generator.cost(y)
-
-    # Check that all states can be accessed and not just the state connected
-    # to readout.
-    cg = ComputationGraph(cost)
-    from blocks.roles import INPUT, OUTPUT
-    dropout_target = VariableFilter(roles=[INNER_OUTPUT],
-                                    # bricks=transitions,
-                                    # name_regex='*'
-                                    )(cg.variables)
-    assert_equal(len(dropout_target), depth)
-
-
 if __name__ == "__main__":
     test = tRecurrentStack()
     test.setUp()
     test.test_one_step()
     test.test_many_steps()
-    # test_recurrentstack_sequence_generator()
