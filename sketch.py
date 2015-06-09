@@ -52,6 +52,7 @@ from blocks.bricks.parallel import Fork
 from blocks_extras import Dump, LoadFromDump
 from blocks_extras import OrthogonalGlorot
 from recurrent_stack import RecurrentStack
+from blocks.initialization import Uniform
 
 floatX = theano.config.floatX
 fuel.config.floatX = floatX
@@ -340,7 +341,7 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
 #----------------------------------------------------------------------------
 def main(name, epochs, batch_size, learning_rate,
          dim, mix_dim, old_model_name, max_length, bokeh, GRU, dropout,
-         depth, max_grad, step_method, epsilon, sample, skip):
+         depth, max_grad, step_method, epsilon, sample, skip, uniform):
 
     #----------------------------------------------------------------------
     datasource = name
@@ -367,6 +368,8 @@ def main(name, epochs, batch_size, learning_rate,
     if skip:
         jobname += 'D'
         assert depth > 1
+    if uniform > 0.:
+        jobname += 'u%d'%int(uniform*100)
 
     if debug:
         jobname += ".debug"
@@ -408,7 +411,10 @@ def main(name, epochs, batch_size, learning_rate,
                                   fork=fork)
 
     # Initialization settings
-    generator.weights_init = OrthogonalGlorot()
+    if uniform > 0.:
+        generator.weights_init = Uniform(width=uniform*2.)
+    else:
+        generator.weights_init = OrthogonalGlorot()
     generator.biases_init = Constant(0)
 
     # Build the cost computation graph [steps, batch_size, 3]
@@ -635,6 +641,9 @@ if __name__ == "__main__":
                         help="To send the input to all layers and not just the"
                              " first. Also to use the states of all layers as"
                              " output and not just the last.")
+    parser.add_argument("-u","--uniform",type=float,default=0,
+                        help="Use uniform weight initialization. "
+                             "Default use Orhtogonal / Glorot.")
 
     args = parser.parse_args()
 
