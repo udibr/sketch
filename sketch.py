@@ -385,7 +385,7 @@ def main(name, epochs, batch_size, learning_rate,
         transition = RecurrentStack(transitions, name="transition",
                                     fast=True, skip_connections=skip)
         if skip:
-            source_names=['states_%d'%d for d in range(depth)]
+            source_names=['states'] + ['states_%d'%d for d in range(1,depth)]
         else:
             source_names=['states_%d'%(depth-1)]
     else:
@@ -468,13 +468,13 @@ def main(name, epochs, batch_size, learning_rate,
     if step_method == 'adam':
         step_rule = Adam(learning_rate)
     elif step_method == 'rmsprop':
-        step_rule = RMSProp(learning_rate,decay_rate=0.95)
+        step_rule = RMSProp(learning_rate, decay_rate=0.95)
     elif step_method == 'adagrad':
         step_rule = AdaGrad(learning_rate)
     elif step_method == 'adadelta':
         step_rule = AdaDelta()
     elif step_method == 'scale':
-        step_rule = Scale(learning_rate=0.1)
+        step_rule = Scale(learning_rate)
     else:
         raise Exception('Unknown sttep method %s'%step_method)
 
