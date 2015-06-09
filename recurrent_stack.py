@@ -318,9 +318,10 @@ from numpy.testing import assert_allclose
 from blocks.initialization import Constant
 from blocks.bricks.recurrent import LSTM
 from collections import OrderedDict
+import unittest
 
 
-class tRecurrentStack(object):
+class TestRecurrentStack(unittest.TestCase):
     def setUp(self):
         depth = 4
         self.depth = depth
@@ -509,10 +510,3 @@ class tRecurrentStack(object):
         self.do_many_steps(self.stack1)
         self.do_many_steps(self.stack2, skip_connections=True)
         self.do_many_steps(self.stack3, skip_connections=True)
-
-
-if __name__ == "__main__":
-    test = tRecurrentStack()
-    test.setUp()
-    test.test_one_step()
-    test.test_many_steps()
