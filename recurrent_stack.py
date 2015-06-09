@@ -17,77 +17,110 @@ from blocks.bricks.parallel import Fork, Parallel
 class RecurrentStack(BaseRecurrent, Initializable):
     u"""Stack of recurrent networks.
 
-    Build a stack of recurrent layers from a supplied list of
-    BaseRecurrent objects. Each object must have a `sequences`,
+    Builds a stack of recurrent layers from a supplied list of
+    :class:`~blocks.bricks.recurrent.BaseRecurrent` objects.
+    Each object must have a `sequences`,
     `contexts`, `states` and `outputs` parameters to its `apply` method,
     such as the ones required by the recurrent decorator from
     :mod:`blocks.bricks.recurrent`.
 
-    The apply parameters from all layers are concatenated.
-    In order to avoid conflict, the names of the elements appearing in the
-    `states` and `outputs` of the apply method of each layers
-    are renamed. The names of the bottom layer are used as-is and for the
-    layers above it a suffixed of the form '_<n>' is added, where '<n>' is
-    the number of the layer starting from 1 (for first layer above bottom)
+    In Blocks in general each brick can have an apply method and this
+    method has attributes that list the names of the arguments that can be
+    passed to the method and the name of the outputs returned by the
+    method.
+    The attributes of the apply method of this class is made from
+    concatenating the attributes of the apply methods of each of the
+    transitions from which the stack is made.
+    In order to avoid conflict, the names of the arguments appearing in
+    the `states` and `outputs` attributes of the apply method of each
+    layers are renamed. The names of the bottom layer are used as-is and
+    a suffix of the form '_<n>' is added to the names from other layers,
+    where '<n>' is the number of the layer starting from 1
+    (for first layer above bottom.)
 
     The `contexts` of all layers are merged into a single list of unique
     names, and no suffix is added. Different layers with the same context
     name will receive the same value.
 
-    The names that appear in `sequences` are treated in the same way
-    if `skip_connections` is set to True.
+    The names that appear in `sequences` are treated in the same way as
+    the names of `states` and `outputs` if `skip_connections` is "True".
     The only exception is the "mask" element that may appear in the
-    `sequences` parameter of all layers, no suffix is added to it and
+    `sequences` attribute of all layers, no suffix is added to it and
     all layers will receive the same mask value.
-    If you set `skip_connections` to False then only the elements of the
+    If you set `skip_connections` to False then only the arguments of the
     `sequences` from the bottom layer will appear in the `sequences`
-    parameter of the apply method of this class.
-    When using this class you can supply all inputs to all layers using
-    a single fork which is created with `output_names` set to the
-    `apply.sequences` of this class' object.
+    attribute of the apply method of this class.
+    When using this class, with `skip_connections` set to "True", you can
+    supply all inputs to all layers using a single fork which is created
+    with `output_names` set to the `apply.sequences` attribute of this
+    class. For example, :class:`~blocks.brick.SequenceGenerator` will
+    create a such a fork.
 
     Whether or not `skip_connections` is set, each layer above the bottom
-    also receive an input (value to its `sequences`) from a fork
-    of the state of the layer below it.
-    It is assumed that all `states` have a "states" element
-    (this can be configured with `states_name` parameter.) This element
-    is forked and then added to all the elements appearing in the
-    `sequences` of the next layer (except for "mask".) If
-    `skip_connections` is False then this fork has a bias by default.
+    also receives an input (values to its `sequences` arguments) from a
+    fork of the state of the layer below it. Not to be confused with the
+    external fork discussed in the previous paragraph.
+    It is assumed that all `states` attributes have a "states" argument
+    name (this can be configured with `states_name` parameter.)
+    The output argument with this name is forked and then added to all the
+    elements appearing in the `sequences` of the next layer (except for
+    "mask".)
+    If `skip_connections` is False then this fork has a bias by default.
     This allows direct usage of this class with input supplied only to the
-    first layer. But if you do supply inputs to all layers then there is
-    no bias and the fork you use to supply the inputs should have its own
-    separate bias.
+    first layer. But if you do supply inputs to all layers (by setting
+    `skip_connections` to "True") then by default there is no bias and the
+    external fork you use to supply the inputs should have its own separate
+    bias.
 
     Parameters
     ----------
     transitions : list
-        List of recurrent units to use in each layer.
+        List of recurrent units to use in each layer. Each derived from
+        :class:`~blocks.bricks.recurrent.BaseRecurrent`
         Note: A suffix with layer number is added to transitions' names.
-    fork_prototype : :class:`.FeedForward`, optional
+    fork_prototype : :class:`~blocks.bricks.FeedForward`, optional
         A prototype for the  transformation applied to states_name from
-        the states of each layer. The transformation is used when state
-        is forked to the sequences of the next layer. By default a
-         :class:`.Linear` transformation is used, with bias if
-         skip_connections is False.
+        the states of each layer. The transformation is used when the
+        `states_name` argument from the `outputs` of one layer
+        is used as input to the `sequences` of the next layer. By default
+        it :class:`~blocks.bricks.Linear` transformation is used, with
+        bias if skip_connections is "False". If you supply your own
+        prototype you have to enable/disable bias depending on the
+        value of `skip_connections`.
     states_name : string
         In a stack of RNN the state of each layer is used as input to the
-        next. The `states_name` identify the element of the states of each
-        layer that should be used for this task. By default the element is
-        called "states". To be more precise, this is the name of the
-        element in the outputs of the apply method of each transition
-        (layer) that is used, via fork, as the sequences (input) of the
-        next layer. The same element should also appear in the states
-        parameter of the apply method.
+        next. The `states_name` identify the argument of the `states`
+        and `outputs` attributes of
+        each layer that should be used for this task. By default the
+        argument is called "states". To be more precise, this is the name
+        of the argument in the `outputs` attribute of the apply method of
+        each transition (layer.) It is used, via fork, as the `sequences`
+        (input) of the next layer. The same element should also appear
+        in the `states` attribute of the apply method.
     fast : bool
         Use the fast, but also memory consuming, implementation of this
         code. By default true.
     skip_connections : bool
-        By default False. When true, the sequences of all layers are
-        add to the sequences of the apply of this class. When false
-        only the sequences of the bottom layer appear in the sequences
+        By default False. When true, the `sequences` of all layers are
+        add to the `sequences` of the apply of this class. When false
+        only the `sequences` of the bottom layer appear in the `sequences`
         of the apply of this class. In this case the default fork
         used internally between layers has a bias (see fork_prototype.)
+
+        An external code can inspect the `sequences` attribute of the
+        apply method of this class to decide which arguments it need
+        (and in what order.) With `skip_connections` you can control
+        what is exposed to the externl code. If it is false then the
+        external code is expected to supply inputs only to the bottom
+        layer and if it is true then the external code is expected to
+        supply inputs to all layers. There is just one small problem,
+        the external inputs to the layers above the bottom layer are
+        added to a fork of the state of the layer below it. As a result
+        the output of two forks is added together and it will be
+        problematic if both will have a bias. It is assumed
+        that the external fork has a bias and therefore by default
+        the internal fork will not have a bias if `skip_connections`
+        is true.
 
     Notes
     -----
@@ -145,7 +178,7 @@ class RecurrentStack(BaseRecurrent, Initializable):
         # Programmatically set the apply method
         self.apply = self.fast_apply if fast else self.low_memory_apply
         # parameters of base level are exposed as is
-        # excpet for mask which we will put at the ver end. See below.
+        # excpet for mask which we will put at the very end. See below.
         for property_ in ["sequences", "states", "outputs"]:
             setattr(self.apply,
                     property_,
@@ -154,11 +187,11 @@ class RecurrentStack(BaseRecurrent, Initializable):
 
         # add parameters of other layers
         if skip_connections:
-            exposed_parameters = ["sequences", "states", "outputs"]
+            exposed_arguments = ["sequences", "states", "outputs"]
         else:
-            exposed_parameters = ["states", "outputs"]
+            exposed_arguments = ["states", "outputs"]
         for level in range(1, depth):
-            for property_ in exposed_parameters:
+            for property_ in exposed_arguments:
                 setattr(self.apply,
                         property_,
                         getattr(self.apply, property_) +
@@ -178,7 +211,7 @@ class RecurrentStack(BaseRecurrent, Initializable):
             sum([transition.apply.contexts for transition in transitions], [])
         ))
 
-        # sum up all the arguments we exepct to see in a call to a transition
+        # sum up all the arguments we expect to see in a call to a transition
         # apply method, anything else is a recursion control
         self.transition_args = set(self.apply.sequences +
                                    self.apply.states +
@@ -250,11 +283,11 @@ class RecurrentStack(BaseRecurrent, Initializable):
             if level > 0:
                 # add the forked states of the layer below
                 inputs = self.forks[level - 1].apply(last_states, as_list=True)
-                for name, input in zip(normal_inputs, inputs):
+                for name, input_ in zip(normal_inputs, inputs):
                     if layer_kwargs.get(name):
-                        layer_kwargs[name] += input
+                        layer_kwargs[name] += input_
                     else:
-                        layer_kwargs[name] = input
+                        layer_kwargs[name] = input_
 
             # Handle all other arguments
             # For example, if this method is called directly (from fast_apply)
@@ -326,24 +359,24 @@ class TestRecurrentStack(unittest.TestCase):
         depth = 4
         self.depth = depth
         dim = 3  # don't change, hardwired in the code
-        tarnsitions = [LSTM(dim=dim) for _ in range(depth)]
-        self.stack0 = RecurrentStack(tarnsitions,
+        transitions = [LSTM(dim=dim) for _ in range(depth)]
+        self.stack0 = RecurrentStack(transitions,
                                      weights_init=Constant(2),
                                      biases_init=Constant(0))
         self.stack0.initialize()
-        self.stack1 = RecurrentStack(tarnsitions,
+        self.stack1 = RecurrentStack(transitions,
                                      weights_init=Constant(2),
                                      biases_init=Constant(0),
                                      fast=False)
         self.stack1.initialize()
 
-        self.stack2 = RecurrentStack(tarnsitions,
+        self.stack2 = RecurrentStack(transitions,
                                      weights_init=Constant(2),
                                      biases_init=Constant(0),
                                      skip_connections=True)
         self.stack2.initialize()
 
-        self.stack3 = RecurrentStack(tarnsitions,
+        self.stack3 = RecurrentStack(transitions,
                                      weights_init=Constant(2),
                                      biases_init=Constant(0),
                                      skip_connections=True,
