@@ -365,7 +365,6 @@ class tRecurrentStack(object):
         W_cell_to_in = 2 * numpy.ones((3,), dtype=theano.config.floatX)
         W_cell_to_out = 2 * numpy.ones((3,), dtype=theano.config.floatX)
         W_cell_to_forget = 2 * numpy.ones((3,), dtype=theano.config.floatX)
-        W_input2input = 2 * numpy.ones((12, 12), dtype=theano.config.floatX)
 
         kwargs = OrderedDict()
         for d in range(depth):
@@ -447,7 +446,6 @@ class tRecurrentStack(object):
         W_cell_to_in = 2 * numpy.ones((3,), dtype=theano.config.floatX)
         W_cell_to_out = 2 * numpy.ones((3,), dtype=theano.config.floatX)
         W_cell_to_forget = 2 * numpy.ones((3,), dtype=theano.config.floatX)
-        W_input2input = 2 * numpy.ones((12, 12), dtype=theano.config.floatX)
 
         kwargs = OrderedDict()
 
