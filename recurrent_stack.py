@@ -25,33 +25,39 @@ class RecurrentStack(BaseRecurrent, Initializable):
 
     The apply parameters from all layers are concatenated.
     In order to avoid conflict, the names of the elements appearing in the
-    `sequences`, `states` and `outputs` of the apply method of each layers
-    bottom layer are used as-is and for the layers above it a suffixed of
-    the form '_<n>' is added, where '<n>' is the
-    number of the layer starting from 1 (for the first layer above bottom)
-    The only exception is the "mask" element that may appear in the
-    `sequences` parameter of all layers, no suffix is added to it and
-    all layers will receive the same mask value.
-
-    Instead of supplying yourself the inputs (sequences), to each layer
-    above the bottom layer, you can decide not to supply any input or you
-    can set `skip_connections` to true to generate
-    input to each layer from a linear transformation of the inputs to the
-    bottom layer.
+    `states` and `outputs` of the apply method of each layers
+    are renamed. The names of the bottom layer are used as-is and for the
+    layers above it a suffixed of the form '_<n>' is added, where '<n>' is
+    the number of the layer starting from 1 (for first layer above bottom)
 
     The `contexts` of all layers are merged into a single list of unique
     names, and no suffix is added. Different layers with the same context
     name will receive the same value.
 
+    The names that appear in `sequences` are treated in the same way
+    if `skip_connections` is set to True.
+    The only exception is the "mask" element that may appear in the
+    `sequences` parameter of all layers, no suffix is added to it and
+    all layers will receive the same mask value.
+    If you set `skip_connections` to False then only the elements of the
+    `sequences` from the bottom layer will appear in the `sequences`
+    parameter of the apply method of this class.
+    When using this class you can supply all inputs to all layers using
+    a single fork which is created with `output_names` set to the
+    `apply.sequences` of this class' object.
+
+    Whether or not `skip_connections` is set, each layer above the bottom
+    also receive an input (value to its `sequences`) from a fork
+    of the state of the layer below it.
     It is assumed that all `states` have a "states" element
     (this can be configured with `states_name` parameter.) This element
     is forked and then added to all the elements appearing in the
-    `sequences` of the next layer (except for "mask".) By default this
-    fork has a bias. This allows direct usage of this class with input
-    supplied only to the first layer. However, if you supply your own
-    inputs to layers above the bottom layer you should take this bias into
-    account or you can replace the fork_protoype to use Linear without
-    bias.
+    `sequences` of the next layer (except for "mask".) If
+    `skip_connections` is False then this fork has a bias by default.
+    This allows direct usage of this class with input supplied only to the
+    first layer. But if you do supply inputs to all layers then there is
+    no bias and the fork you use to supply the inputs should have its own
+    separate bias.
 
     Parameters
     ----------
@@ -62,7 +68,8 @@ class RecurrentStack(BaseRecurrent, Initializable):
         A prototype for the  transformation applied to states_name from
         the states of each layer. The transformation is used when state
         is forked to the sequences of the next layer. By default a
-         :class:`.Linear` transformation with biases.
+         :class:`.Linear` transformation is used, with bias if
+         skip_connections is False.
     states_name : string
         In a stack of RNN the state of each layer is used as input to the
         next. The `states_name` identify the element of the states of each
@@ -76,68 +83,97 @@ class RecurrentStack(BaseRecurrent, Initializable):
         Use the fast, but also memory consuming, implementation of this
         code. By default true.
     skip_connections : bool
-        By default False. When true, each element in the
-        sequences to the bottom layer is passed through a linear
-        transformation, without bias, to each of the sequences of the
-        other layers. When true, all layers must have the same names in
-        their sequences and in the same order.
+        By default False. When true, the sequences of all layers are
+        add to the sequences of the apply of this class. When false
+        only the sequences of the bottom layer appear in the sequences
+        of the apply of this class. In this case the default fork
+        used internally between layers has a bias (see fork_prototype.)
 
     Notes
     -----
     See :class:`.BaseRecurrent` for more initialization parameters.
 
     """
-    def suffix(self, name, level):
+    @staticmethod
+    def suffix(name, level):
         if name == "mask":
             return "mask"
         if level == 0:
             return name
-        if isinstance(name, list):
-            return [self.suffix(n, level) for n in name if n != "mask"]
         return name + '_' + str(level)
+
+    @staticmethod
+    def suffixes(names, level):
+        return [RecurrentStack.suffix(name, level)
+                for name in names if name != "mask"]
+
+    @staticmethod
+    def split_suffix(name):
+        # Target name with suffix to the correct layer
+        name_level = name.split('_')
+        if len(name_level) == 2:
+            name, level = name_level
+            level = int(level)
+        else:
+            # It must be from bottom layer
+            level = 0
+        return name, level
 
     def __init__(self, transitions, fork_prototype=None, states_name="states",
                  fast=True, skip_connections=False, **kwargs):
         super(RecurrentStack, self).__init__(**kwargs)
 
         self.states_name = states_name
+        self.skip_connections = skip_connections
 
         for level, transition in enumerate(transitions):
             transition.name += '_' + str(level)
         self.transitions = transitions
 
         if fork_prototype is None:
-            # By default use Linear (with bias) as a default fork.
-            fork_prototype = Linear(use_bias=True)
+            # If we are not supplied any inputs for the layers above
+            # bottom then use bias
+            fork_prototype = Linear(use_bias=not skip_connections)
         depth = len(transitions)
         self.forks = [Fork(self.normal_inputs(level),
                            name='fork_' + str(level),
                            prototype=fork_prototype)
                       for level in range(1, depth)]
 
-        self.skip_connections = []
-        input_names = self.normal_inputs(0)
-        input_dims = self.transitions[0].get_dims(input_names)
-        if skip_connections:
-            for level in range(1, depth):
-                for name_d, name_0 in zip(self.normal_inputs(level),
-                                          input_names):
-                    assert name_d == name_0
-                # we already have bias in the fork used in super
-                self.skip_connections.append(Parallel(
-                    input_names, input_dims,
-                    self.transitions[level].get_dims(input_names),
-                    child_prefix='skip_' + str(level)))
-
-        self.children = self.transitions + self.forks + self.skip_connections
+        self.children = self.transitions + self.forks
 
         # Programmatically set the apply method
         self.apply = self.fast_apply if fast else self.low_memory_apply
-        for level, transition in enumerate(transitions):
-            for property_ in ["sequences", "states", "outputs"]:
-                v = getattr(self.apply, property_, []) +\
-                    self.suffix(getattr(transition.apply, property_), level)
-                setattr(self.apply, property_, v)
+        # parameters of base level are exposed as is
+        # excpet for mask which we will put at the ver end. See below.
+        for property_ in ["sequences", "states", "outputs"]:
+            setattr(self.apply,
+                    property_,
+                    self.suffixes(getattr(transitions[0].apply, property_), 0)
+                )
+
+        # add parameters of other layers
+        if skip_connections:
+            exposed_parameters = ["sequences", "states", "outputs"]
+        else:
+            exposed_parameters = ["states", "outputs"]
+        for level in range(1, depth):
+            for property_ in exposed_parameters:
+                setattr(self.apply,
+                        property_,
+                        getattr(self.apply, property_) +
+                        self.suffixes(getattr(transitions[level].apply,
+                                              property_),
+                                      level)
+                        )
+
+        # place mask at end because it has a default value (None)
+        # and therefor should come after arguments that may come us
+        # unnamed arguments
+        if "mask" in transitions[0].apply.sequences:
+            self.apply.sequences.append("mask")
+
+        # add context
         self.apply.contexts = list(set(
             sum([transition.apply.contexts for transition in transitions], [])
         ))
@@ -167,12 +203,6 @@ class RecurrentStack(BaseRecurrent, Initializable):
             fork.output_dims = self.transitions[level + 1].get_dims(
                 fork.output_names)
 
-        for level, skip in enumerate(self.skip_connections):
-            skip.input_dims = self.transitions[0].get_dims(
-                self.normal_inputs(0))
-            skip.output_dims = self.transitions[level + 1].get_dims(
-                self.normal_inputs(level + 1))
-
     def do_apply(self, *args, **kwargs):
         """Apply the stack of transitions.
 
@@ -182,16 +212,16 @@ class RecurrentStack(BaseRecurrent, Initializable):
 
         Parameters
         ----------
-        See docstring of this class for arguments appearing in
+        See docstring of the class for arguments appearing in
         self.apply.sequences, self.apply.states, self.apply.contexts
         All arguments values are of type :class:`~tensor.TensorVariable`.
 
-        In addition the iterate, reverse, return_initial_states or
-        any other argument defined in recurrent_apply wrapper.
+        In addition the `iterate`, `reverse`, `return_initial_states` or
+        any other argument defined in `recurrent_apply` wrapper.
 
         Returns
         -------
-        The outputs of all transitions as defined in self.apply.outputs
+        The outputs of all transitions as defined in `self.apply.outputs`
         All return values are of type :class:`~tensor.TensorVariable`.
 
         """
@@ -201,29 +231,26 @@ class RecurrentStack(BaseRecurrent, Initializable):
 
         results = []
         last_states = None
-        sequences_0 = dict((name, kwargs.get(name))
-                           for name in self.normal_inputs(0))
         for level, transition in enumerate(self.transitions):
+            normal_inputs = self.normal_inputs(level)
             layer_kwargs = dict()
-            for name in transition.apply.sequences:
-                layer_kwargs[name] = kwargs.get(self.suffix(name, level))
+
+            if level == 0 or self.skip_connections:
+                for name in normal_inputs:
+                    layer_kwargs[name] = kwargs.get(self.suffix(name, level))
+            if "mask" in transition.apply.sequences:
+                layer_kwargs["mask"] = kwargs.get("mask")
+
             for name in transition.apply.states:
                 layer_kwargs[name] = kwargs.get(self.suffix(name, level))
+
             for name in transition.apply.contexts:
                 layer_kwargs[name] = kwargs.get(name)  # contexts has no suffix
 
             if level > 0:
-                names = self.normal_inputs(level)
-
-                if self.skip_connections:
-                    # if skip is defined, overwrite other inputs
-                    skip = self.skip_connections[level - 1]
-                    skip_inputs = skip.apply(as_list=True, **sequences_0)
-                    layer_kwargs.update(zip(names, skip_inputs))
-
                 # add the forked states of the layer below
                 inputs = self.forks[level - 1].apply(last_states, as_list=True)
-                for name, input in zip(names, inputs):
+                for name, input in zip(normal_inputs, inputs):
                     if layer_kwargs.get(name):
                         layer_kwargs[name] += input
                     else:
@@ -268,26 +295,14 @@ class RecurrentStack(BaseRecurrent, Initializable):
                 # hopefully there is no conflict between layers about dim
                 return transition.get_dim(name)
 
-        # Target name with suffix to the correct layer
-        name_level = name.split('_')
-        if len(name_level) == 2:
-            name, level = name_level
-        else:
-            # It must be from bottom layer
-            level = 0
-
-        transition = self.transitions[int(level)]
+        name, level = self.split_suffix(name)
+        transition = self.transitions[level]
         return transition.get_dim(name)
 
     @application
     def initial_state(self, state_name, batch_size, *args, **kwargs):
-        state_name_level = state_name.split('_')
-        if len(state_name_level) == 2:
-            state_name, level = state_name_level
-        else:
-            # It must be from bottom layer
-            level = 0
-        transition = self.transitions[int(level)]
+        state_name, level = self.split_suffix(state_name)
+        transition = self.transitions[level]
         return transition.initial_state(state_name, batch_size,
                                         *args, **kwargs)
 
@@ -353,16 +368,17 @@ class tRecurrentStack(object):
         W_input2input = 2 * numpy.ones((12, 12), dtype=theano.config.floatX)
 
         kwargs = OrderedDict()
-        kwargs['inputs'] = tensor.matrix('inputs')
-        kwargs['inputs'].tag.test_value = x_val
         for d in range(depth):
             if d > 0:
                 suffix = '_' + str(d)
             else:
                 suffix = ''
-            kwargs['states' + suffix] = tensor.matrix('states_' + str(d))
+            if d == 0 or skip_connections:
+                kwargs['inputs' + suffix] = tensor.matrix('inputs' + suffix)
+                kwargs['inputs' + suffix].tag.test_value = x_val
+            kwargs['states' + suffix] = tensor.matrix('states' + suffix)
             kwargs['states' + suffix].tag.test_value = h0_val[d]
-            kwargs['cells' + suffix] = tensor.matrix('cells_' + str(d))
+            kwargs['cells' + suffix] = tensor.matrix('cells' + suffix)
             kwargs['cells' + suffix].tag.test_value = c0_val[d]
         results = stack.apply(iterate=False, **kwargs)
         next_h = theano.function(inputs=list(kwargs.values()),
@@ -373,8 +389,10 @@ class tRecurrentStack(object):
 
         h1_val = []
         x_v = x_val
-        args_val = [x_val]
+        args_val = []
         for d in range(depth):
+            if d == 0 or skip_connections:
+                args_val.append(x_val)
             h0_v = h0_val[d]
             args_val.append(h0_v)
             c0_v = c0_val[d]
@@ -383,7 +401,7 @@ class tRecurrentStack(object):
             # omitting biases because they are zero
             activation = numpy.dot(h0_v, W_state_val) + x_v
             if skip_connections and d > 0:
-                activation += numpy.dot(x_val, W_input2input)
+                activation += x_val
 
             i_t = sigmoid(activation[:, :3] + c0_v * W_cell_to_in)
             f_t = sigmoid(activation[:, 3:6] + c0_v * W_cell_to_forget)
@@ -432,8 +450,16 @@ class tRecurrentStack(object):
         W_input2input = 2 * numpy.ones((12, 12), dtype=theano.config.floatX)
 
         kwargs = OrderedDict()
-        kwargs['inputs'] = tensor.tensor3('inputs')
-        kwargs['inputs'].tag.test_value = x_val
+
+        for d in range(depth):
+            if d > 0:
+                suffix = '_' + str(d)
+            else:
+                suffix = ''
+            if d == 0 or skip_connections:
+                kwargs['inputs' + suffix] = tensor.tensor3('inputs' + suffix)
+                kwargs['inputs' + suffix].tag.test_value = x_val
+
         kwargs['mask'] = tensor.matrix('mask')
         kwargs['mask'].tag.test_value = mask_val
         results = stack.apply(iterate=True, **kwargs)
@@ -452,7 +478,7 @@ class tRecurrentStack(object):
                 c_v = c_val[d][i - 1, :, :]
                 activation = numpy.dot(h_v, W_state_val) + x_v
                 if skip_connections and d > 0:
-                    activation += numpy.dot(x_val[i - 1], W_input2input)
+                    activation += x_val[i - 1]
 
                 i_t = sigmoid(activation[:, :3] + c_v * W_cell_to_in)
                 f_t = sigmoid(activation[:, 3:6] + c_v * W_cell_to_forget)
@@ -474,7 +500,8 @@ class tRecurrentStack(object):
                 h_val[d][i, :, :] = h_vs[d]
                 c_val[d][i, :, :] = c_vs[d]
 
-        res = calc_h(x_val, mask_val)
+        args_val = [x_val]*(depth if skip_connections else 1) + [mask_val]
+        res = calc_h(*args_val)
         for d in range(depth):
             assert_allclose(h_val[d][1:], res[d * 2], rtol=1e-4)
             assert_allclose(c_val[d][1:], res[d * 2 + 1], rtol=1e-4)
