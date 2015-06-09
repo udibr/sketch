@@ -262,6 +262,9 @@ class RecurrentStack(BaseRecurrent, Initializable):
         assert nargs <= len(self.apply.sequences)
         kwargs.update(zip(self.apply.sequences[:nargs], args))
 
+        if kwargs.get("reverse", False):
+            raise Exception("reverse=True not implemented.")
+
         results = []
         last_states = None
         for level, transition in enumerate(self.transitions):
