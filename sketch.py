@@ -341,7 +341,7 @@ class SketchEmitter(AbstractEmitter, Initializable, Random):
 #----------------------------------------------------------------------------
 def main(name, epochs, batch_size, learning_rate,
          dim, mix_dim, old_model_name, max_length, bokeh, GRU, dropout,
-         depth, max_grad, step_method, epsilon, sample, skip, uniform):
+         depth, max_grad, step_method, epsilon, sample, skip, uniform, top):
 
     #----------------------------------------------------------------------
     datasource = name
@@ -368,6 +368,9 @@ def main(name, epochs, batch_size, learning_rate,
     if skip:
         jobname += 'D'
         assert depth > 1
+    if top:
+        jobname += 'T'
+        assert depth > 1
     if uniform > 0.:
         jobname += 'u%d'%int(uniform*100)
 
@@ -386,7 +389,7 @@ def main(name, epochs, batch_size, learning_rate,
                    for _ in range(depth)]
     if depth > 1:
         transition = RecurrentStack(transitions, name="transition",
-                                    fast=True, skip_connections=skip)
+                                    fast=True, skip_connections=skip or top)
         if skip:
             source_names=['states'] + ['states_%d'%d for d in range(1,depth)]
         else:
@@ -641,6 +644,8 @@ if __name__ == "__main__":
                         help="To send the input to all layers and not just the"
                              " first. Also to use the states of all layers as"
                              " output and not just the last.")
+    parser.add_argument("--top", action='store_true', default=False,
+                        help="Same as skip but use only the output of top layer.")
     parser.add_argument("-u","--uniform",type=float,default=0,
                         help="Use uniform weight initialization. "
                              "Default use Orhtogonal / Glorot.")
