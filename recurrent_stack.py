@@ -263,7 +263,7 @@ class RecurrentStack(BaseRecurrent, Initializable):
         kwargs.update(zip(self.apply.sequences[:nargs], args))
 
         if kwargs.get("reverse", False):
-            raise Exception("reverse=True not implemented.")
+            raise NotImplementedError
 
         results = []
         last_states = None
