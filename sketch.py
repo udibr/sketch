@@ -132,6 +132,10 @@ class Sample(SimpleExtension):
     def do(self, callback_name, *args):
         batch_size = self.N * self.N
 
+        epochstr = ""
+        if self.main_loop:
+            epochstr = "-{:03d}".format(self.main_loop.log.status['epochs_done'])
+
         res = self.sample()
         outputs = res[-2]
 
@@ -181,7 +185,7 @@ class Sample(SimpleExtension):
         for i in range(batch_size):
             pl.subplot(h,w,i+1)
             drawpoints(outputs[:,i,:], xmin, ymin, xmax, ymax)
-        fname = os.path.join(self.path,'sketch.png')
+        fname = os.path.join(self.path,'sketch{}.png'.format(epochstr))
         print('Writting to %s'%fname)
         pl.subplots_adjust(left=0.005,right=0.995,bottom=0.005,top=0.995,
                            wspace=0.01,hspace=0.01)
@@ -198,7 +202,7 @@ class Sample(SimpleExtension):
         pl.title('Pen down for different samples vs. iteration step')
         if not os.path.exists(self.path):
             os.mkdir(self.path)
-        fname = os.path.join(self.path,'pen.png')
+        fname = os.path.join(self.path,'pen{}.png'.format(epochstr))
         print('Writting to %s'%fname)
         pl.savefig(fname)
 
