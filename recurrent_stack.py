@@ -97,9 +97,6 @@ class RecurrentStack(BaseRecurrent, Initializable):
         each transition (layer.) It is used, via fork, as the `sequences`
         (input) of the next layer. The same element should also appear
         in the `states` attribute of the apply method.
-    fast : bool
-        Use the fast, but also memory consuming, implementation of this
-        code. By default true.
     skip_connections : bool
         By default False. When true, the `sequences` of all layers are
         add to the `sequences` of the apply of this class. When false
@@ -153,7 +150,7 @@ class RecurrentStack(BaseRecurrent, Initializable):
         return name, level
 
     def __init__(self, transitions, fork_prototype=None, states_name="states",
-                 fast=True, skip_connections=False, **kwargs):
+                 skip_connections=False, **kwargs):
         super(RecurrentStack, self).__init__(**kwargs)
 
         self.states_name = states_name
@@ -175,8 +172,7 @@ class RecurrentStack(BaseRecurrent, Initializable):
 
         self.children = self.transitions + self.forks
 
-        # Programmatically set the apply method
-        self.apply = self.fast_apply if fast else self.low_memory_apply
+        # Programmatically set the apply parameters.
         # parameters of base level are exposed as is
         # excpet for mask which we will put at the very end. See below.
         for property_ in ["sequences", "states", "outputs"]:
@@ -217,6 +213,10 @@ class RecurrentStack(BaseRecurrent, Initializable):
                                    self.apply.states +
                                    self.apply.contexts)
 
+        for property_ in  ["sequences", "states", "contexts", "outputs"]:
+            setattr(self.low_memory_apply, property_,
+                    getattr(self.apply, property_))
+
     def normal_inputs(self, level):
         return [name for name in self.transitions[level].apply.sequences
                 if name != 'mask']
@@ -240,8 +240,11 @@ class RecurrentStack(BaseRecurrent, Initializable):
         """Apply the stack of transitions.
 
         This is the undecorated implementation of the apply method.
-        It is separated from the decorated apply method in order to allow
-        usage of different docrations (wrappers) to be used.
+        A method with an @apply decoration should call this method with
+        `iterate=True` to indicate that the iteration over all steps should
+        be done internally by this method. A method with a @recurrent method
+        should have `iterate=False` (or unset) to indicate that the iteration
+        over all steps is done externally.
 
         Parameters
         ----------
@@ -293,10 +296,11 @@ class RecurrentStack(BaseRecurrent, Initializable):
                         layer_kwargs[name] = input_
 
             # Handle all other arguments
-            # For example, if this method is called directly (from fast_apply)
-            # then these arguments can be the same arguments that recurrent
+            # For example, if the method is called directly
+            # (`low_memory=False`)
+            # then the arguments that recurrent
             # expects to see such as: 'iterate', 'reverse',
-            # 'return_initial_states'
+            # 'return_initial_states' may appear.
             for k in set(kwargs.keys()) - self.transition_args:
                 layer_kwargs[k] = kwargs[k]
 
@@ -319,7 +323,30 @@ class RecurrentStack(BaseRecurrent, Initializable):
         return self.do_apply(*args, **kwargs)
 
     @application
-    def fast_apply(self, *args, **kwargs):
+    def apply(self, *args, **kwargs):
+        """Apply the stack of transitions.
+
+        Parameters
+        ----------
+        low_memory : bool
+            Use the slow, but also memory efficient, implementation of this
+            code.
+
+        See docstring of the class for arguments appearing in
+        self.apply.sequences, self.apply.states, self.apply.contexts
+        All arguments values are of type :class:`~tensor.TensorVariable`.
+
+        In addition the `iterate`, `reverse`, `return_initial_states` or
+        any other argument defined in `recurrent_apply` wrapper.
+
+        Returns
+        -------
+        The outputs of all transitions as defined in `self.apply.outputs`
+        All return values are of type :class:`~tensor.TensorVariable`.
+
+        """
+        if kwargs.pop('low_memory', False):
+            return self.low_memory_apply(*args, **kwargs)
         # we let the transition in self.transitions each do their iterations
         # separatly, one layer at a time.
         return self.do_apply(*args, **kwargs)
@@ -367,11 +394,6 @@ class TestRecurrentStack(unittest.TestCase):
                                      weights_init=Constant(2),
                                      biases_init=Constant(0))
         self.stack0.initialize()
-        self.stack1 = RecurrentStack(transitions,
-                                     weights_init=Constant(2),
-                                     biases_init=Constant(0),
-                                     fast=False)
-        self.stack1.initialize()
 
         self.stack2 = RecurrentStack(transitions,
                                      weights_init=Constant(2),
@@ -379,14 +401,7 @@ class TestRecurrentStack(unittest.TestCase):
                                      skip_connections=True)
         self.stack2.initialize()
 
-        self.stack3 = RecurrentStack(transitions,
-                                     weights_init=Constant(2),
-                                     biases_init=Constant(0),
-                                     skip_connections=True,
-                                     fast=False)
-        self.stack3.initialize()
-
-    def do_one_step(self, stack, skip_connections=False):
+    def do_one_step(self, stack, skip_connections=False, low_memory=False):
         depth = self.depth
 
         # batch=2
@@ -416,7 +431,7 @@ class TestRecurrentStack(unittest.TestCase):
             kwargs['states' + suffix].tag.test_value = h0_val[d]
             kwargs['cells' + suffix] = tensor.matrix('cells' + suffix)
             kwargs['cells' + suffix].tag.test_value = c0_val[d]
-        results = stack.apply(iterate=False, **kwargs)
+        results = stack.apply(iterate=False, low_memory=low_memory, **kwargs)
         next_h = theano.function(inputs=list(kwargs.values()),
                                  outputs=results)
 
@@ -456,11 +471,11 @@ class TestRecurrentStack(unittest.TestCase):
 
     def test_one_step(self):
         self.do_one_step(self.stack0)
-        self.do_one_step(self.stack1)
+        self.do_one_step(self.stack0, low_memory=True)
         self.do_one_step(self.stack2, skip_connections=True)
-        self.do_one_step(self.stack3, skip_connections=True)
+        self.do_one_step(self.stack2, skip_connections=True, low_memory=True)
 
-    def do_many_steps(self, stack, skip_connections=False):
+    def do_many_steps(self, stack, skip_connections=False, low_memory=False):
         depth = self.depth
 
         # 24 steps
@@ -497,7 +512,7 @@ class TestRecurrentStack(unittest.TestCase):
 
         kwargs['mask'] = tensor.matrix('mask')
         kwargs['mask'].tag.test_value = mask_val
-        results = stack.apply(iterate=True, **kwargs)
+        results = stack.apply(iterate=True, low_memory=low_memory, **kwargs)
         calc_h = theano.function(inputs=list(kwargs.values()),
                                  outputs=results)
 
@@ -543,6 +558,6 @@ class TestRecurrentStack(unittest.TestCase):
 
     def test_many_steps(self):
         self.do_many_steps(self.stack0)
-        self.do_many_steps(self.stack1)
+        self.do_many_steps(self.stack0, low_memory=True)
         self.do_many_steps(self.stack2, skip_connections=True)
-        self.do_many_steps(self.stack3, skip_connections=True)
+        self.do_many_steps(self.stack2, skip_connections=True, low_memory=True)

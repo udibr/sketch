@@ -393,7 +393,7 @@ def main(name, epochs, batch_size, learning_rate,
                    for _ in range(depth)]
     if depth > 1:
         transition = RecurrentStack(transitions, name="transition",
-                                    fast=True, skip_connections=skip or top)
+                                    skip_connections=skip or top)
         if skip:
             source_names=['states'] + ['states_%d'%d for d in range(1,depth)]
         else:
