@@ -43,7 +43,7 @@ from blocks.extensions.monitoring import DataStreamMonitoring
 from blocks.extensions.monitoring import TrainingDataMonitoring
 from blocks.main_loop import MainLoop
 from blocks.model import Model
-from blocks.bricks.recurrent import LSTM, GatedRecurrent
+from blocks.bricks.recurrent import LSTM, GatedRecurrent, RecurrentStack
 from blocks.bricks.sequence_generators import SequenceGenerator, Readout
 from fuel.datasets import H5PYDataset
 from blocks.filter import VariableFilter
@@ -51,7 +51,7 @@ from blocks.bricks.parallel import Fork
 
 from blocks_extras import Dump, LoadFromDump
 from blocks_extras import OrthogonalGlorot
-from recurrent_stack import RecurrentStack
+# from recurrent_stack import RecurrentStack
 from blocks.initialization import Uniform
 
 floatX = theano.config.floatX
