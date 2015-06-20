@@ -608,9 +608,9 @@ def main(name, epochs, batch_size, learning_rate,
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--name", type=str,
-                default="handwriting", help="Name for this experiment")
+                        default="handwriting", help="Name for this experiment")
     parser.add_argument("--epochs", type=int,
-                default=500, help="Number of training epochs to do")
+                        default=500, help="Number of training epochs to do")
     parser.add_argument("--bs", "--batch-size", type=int, dest="batch_size",
                 default=56, help="Size of each mini-batch.")
     parser.add_argument("--lr", "--learning-rate", type=float,
@@ -619,27 +619,29 @@ if __name__ == "__main__":
     parser.add_argument("--dim", type=int,
                 default=700, help="RNN state dimension")
     parser.add_argument("--mix-dim", type=int,
-                default=20, help="number of gaussian mixtures")
+                default=20, help="Number of gaussian mixtures")
     parser.add_argument("--model", type=str, dest="old_model_name",
-                help="start from an old model created by a previous run."
-                     " Or use continue")
+                        metavar="old-model/continue",
+                        help="Start from an old model created by a previous"
+                             " run. Or use continue")
     parser.add_argument("--max-length", type=int, default=600,
-                        help="maximal number of steps in a single sequence")
+                        help="Maximal number of steps in a single sequence")
     parser.add_argument("--bokeh", action='store_true', default=False,
                         help="Set if you want to use Bokeh ")
     parser.add_argument("--GRU", action='store_true', default=False,
                         help="Use GatedRecurrent network instead of LSTM.")
     parser.add_argument("-d","--dropout",type=float,default=0,
-                        help="dropout. Set to 0 for no dropout.")
+                        help="Use dropout. Set to 0 for no dropout.")
     parser.add_argument("--depth", type=int,
-                default=3, help="Number of recurrent layers to be stacked.")
+                        default=3,
+                        help="Number of recurrent layers to be stacked.")
     parser.add_argument("-G", "--max-grad", type=float,
                         default=10.,
                         help="Maximal gradient limit")
     parser.add_argument("--step-method", type=str, default="adam",
-                        help="what gradient step rule to use."
-                             " Default adam or"
-                             " scale, rmsprop, adagrad, adadelta")
+                        choices=["adam", "scale", "rmsprop", "adagrad",
+                                 "adadelta"],
+                        help="What gradient step rule to use. Default adam.")
     parser.add_argument("--epsilon",type=float,default=1e-5,
                         help="Epsilon value for mixture of gaussians")
     parser.add_argument("--sample", action='store_true', default=False,
