@@ -411,11 +411,7 @@ def main(name, epochs, batch_size, learning_rate,
         source_names=source_names,
         emitter=emitter,
         name="readout")
-    normal_inputs = [name for name in transition.apply.sequences
-                     if 'mask' not in name]
-    fork = Fork(normal_inputs, prototype=Linear(use_bias=True))
-    generator = SequenceGenerator(readout=readout, transition=transition,
-                                  fork=fork)
+    generator = SequenceGenerator(readout=readout, transition=transition)
 
     # Initialization settings
     if uniform > 0.:
