@@ -19,6 +19,9 @@ if debug:
     theano.config.optimizer = 'fast_compile'  # or "None"
     theano.config.exception_verbosity = 'high'
     theano.config.compute_test_value = 'warn'
+else:
+    theano.config.compute_test_value = 'off'
+
 
 import theano.tensor as T
 import numpy as np
@@ -37,7 +40,7 @@ from blocks.initialization import Constant
 from blocks.graph import ComputationGraph, apply_dropout
 from blocks.extensions import FinishAfter, Timing, Printing, ProgressBar
 from blocks.extensions.saveload import SimpleExtension
-from blocks.bricks import Random, Initializable, Linear
+from blocks.bricks import Random, Initializable
 from blocks.bricks.base import application
 from blocks.extensions.monitoring import DataStreamMonitoring
 from blocks.extensions.monitoring import TrainingDataMonitoring
@@ -47,11 +50,9 @@ from blocks.bricks.recurrent import LSTM, GatedRecurrent, RecurrentStack
 from blocks.bricks.sequence_generators import SequenceGenerator, Readout
 from fuel.datasets import H5PYDataset
 from blocks.filter import VariableFilter
-from blocks.bricks.parallel import Fork
 
 from blocks_extras import Dump, LoadFromDump
 from blocks_extras import OrthogonalGlorot
-# from recurrent_stack import RecurrentStack
 from blocks.initialization import Uniform
 
 floatX = theano.config.floatX
@@ -523,14 +524,14 @@ def main(name, epochs, batch_size, learning_rate,
                                     datasource+'.hdf5')
 
     train_ds = H5PYDataset(datasource_fname, #max_length=max_length,
-                             which_set='train', sources=('features',),
+                             which_sets=['train'], sources=('features',),
                              load_in_memory=True)
     train_stream = DataStream(train_ds,
                               iteration_scheme=ShuffledScheme(
                                   train_ds.num_examples, batch_size))
 
     test_ds = H5PYDataset(datasource_fname, #max_length=max_length,
-                            which_set='test', sources=('features',),
+                            which_sets=['test'], sources=('features',),
                             load_in_memory=True)
     test_stream  = DataStream(test_ds,
                               iteration_scheme=SequentialScheme(
@@ -579,7 +580,7 @@ def main(name, epochs, batch_size, learning_rate,
                    FinishAfter(after_n_epochs=epochs)
                     # This shows a way to handle NaN emerging during
                     # training: simply finish it.
-                    .add_condition("after_batch", _is_nan),
+                    .add_condition(["after_batch"], _is_nan),
                    ]
 
     if bokeh:
