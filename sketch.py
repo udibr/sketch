@@ -46,7 +46,8 @@ from blocks.extensions.monitoring import DataStreamMonitoring
 from blocks.extensions.monitoring import TrainingDataMonitoring
 from blocks.main_loop import MainLoop
 from blocks.model import Model
-from blocks.bricks.recurrent import LSTM, GatedRecurrent, RecurrentStack
+from blocks.bricks.recurrent import LSTM, GatedRecurrent
+from blocks.bricks.recurrent import RecurrentStack
 from blocks.bricks.sequence_generators import SequenceGenerator, Readout
 from fuel.datasets import H5PYDataset
 from blocks.filter import VariableFilter
@@ -396,9 +397,9 @@ def main(name, epochs, batch_size, learning_rate,
         transition = RecurrentStack(transitions, name="transition",
                                     skip_connections=skip or top)
         if skip:
-            source_names=['states'] + ['states_%d'%d for d in range(1,depth)]
+            source_names=[RecurrentStack.suffix('states', d) for d in range(depth)]
         else:
-            source_names=['states_%d'%(depth-1)]
+            source_names=[RecurrentStack.suffix('states', depth-1)]
     else:
         transition = transitions[0]
         transition.name = "transition"
@@ -584,11 +585,10 @@ def main(name, epochs, batch_size, learning_rate,
                    ]
 
     if bokeh:
-        from blocks.extensions.plot import Plot
+        from blocks.extras.extensions.plot import Plot
         extensions.append(Plot(
             'sketch',
-            channels=[
-                ['cost'],]))
+            channels=[['cost']], every_n_batches=10))
 
     # Construct the main loop and start training!
     main_loop = MainLoop(
