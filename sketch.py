@@ -432,7 +432,7 @@ def main(name, epochs, batch_size, learning_rate,
 
     # Give an idea of what's going on
     model = Model(cost)
-    params = model.get_params()
+    params = model.get_parameter_dict()
     logger.info("Parameters:\n" +
                 pprint.pformat(
                     [(key, value.get_value().shape) for key, value
@@ -492,7 +492,7 @@ def main(name, epochs, batch_size, learning_rate,
     step_rule = CompositeRule([StepClipping(max_grad), step_rule])
 
     algorithm = GradientDescent(
-        cost=opt_cost, params=cg.parameters,
+        cost=opt_cost, parameters=cg.parameters,
         step_rule=step_rule)
 
     #------------------------------------------------------------
