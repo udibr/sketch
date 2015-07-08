@@ -51,8 +51,9 @@ from blocks.bricks.recurrent import RecurrentStack
 from blocks.bricks.sequence_generators import SequenceGenerator, Readout
 from fuel.datasets import H5PYDataset
 from blocks.filter import VariableFilter
+from blocks.extensions.saveload import Checkpoint, Load
+import cPickle as pickle
 
-from blocks_extras import Dump, LoadFromDump
 from blocks_extras import OrthogonalGlorot
 from blocks.initialization import Uniform
 
@@ -446,12 +447,13 @@ def main(name, epochs, batch_size, learning_rate,
 
     #------------------------------------------------------------
     extensions = []
-    if old_model_name == 'continue':
-        extensions.append(LoadFromDump(jobname))
-    elif old_model_name:
-        # or you can just load the weights without state using:
-        old_params = LoadFromDump(old_model_name).manager.load_parameters()
-        model.set_param_values(old_params)
+    if old_model_name:
+        if old_model_name == 'continue':
+            old_model_name = jobname
+        with open(old_model_name + '_model', "rb") as f:
+            old_model = pickle.load(f)
+        model.set_parameter_values(old_model.get_parameter_values())
+        del old_model
     else:
         # Initialize parameters
         for brick in model.get_top_bricks():
@@ -572,8 +574,9 @@ def main(name, epochs, batch_size, learning_rate,
                    # perform multiple dumps at different intervals
                    # so if one of them breaks (has nan) we can hopefully
                    # find a model from few batches ago in the other
-                   Dump(jobname, every_n_batches=11),
-                   Dump(jobname+'.test', every_n_batches=100),
+                   Checkpoint(jobname,
+                              before_training=False, after_epoch=True,
+                              save_separately=['log', 'model']),
                    Sample(generator, steps=max_length,
                           path=jobname+'.test',
                           every_n_batches=100),
